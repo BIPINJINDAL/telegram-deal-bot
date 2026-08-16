@@ -27,7 +27,7 @@ HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
 }
 
-# --- Persistent Database Setup ---
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -67,25 +67,66 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- Official Amazon Affiliate URL Builder (100% Guaranteed Open) ---
-def get_clean_amazon_affiliate_url(base_url):
+# --- Multi-Platform Working Link Engine ---
+def get_clean_deal_link(platform, base_url):
     clean_url = base_url.split("?")[0].strip()
-    return f"{clean_url}?tag={AMAZON_TAG}"
+    if platform == "Amazon":
+        return f"{clean_url}?tag={AMAZON_TAG}"
+    elif platform == "Flipkart":
+        return f"{clean_url}?affid=dealstracker"
+    return base_url
 
-# --- 100% Tested Active Amazon Products (Valid Links & High-Res Images) ---
-VERIFIED_DEALS_CATALOG = [
+# --- Multi-Platform Verified Loot Deals Pool ---
+MULTI_PLATFORM_CATALOG = [
     {
-        "id": "item_boat_airdopes_141",
-        "title": "boAt Airdopes 141 Bluetooth TWS Earbuds (42H Playtime, Low Latency, Fast Charge)",
-        "price": "₹999",
-        "mrp": "₹4,490",
-        "discount": "78% OFF",
-        "url": "https://www.amazon.in/dp/B09N3ZNHTY",
-        "image_url": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg"
+        "id": "flipkart_boat_airdopes_131",
+        "platform": "Flipkart",
+        "store_badge": "🛍️ FLIPKART LOOT DEAL",
+        "title": "boAt Airdopes 131 PRO True Wireless Earbuds (45H Playtime, Beast Mode)",
+        "price": "₹899",
+        "mrp": "₹2,990",
+        "discount": "69% OFF",
+        "url": "https://www.flipkart.com/boat-airdopes-131-pro-tws-earbuds/p/itmca2bb89e02315",
+        "image_url": "https://rukminim2.flixcart.com/image/832/832/xif0q/headphone/p/r/z/airdopes-131-pro-boat-original-imagr767zgzhg9hy.jpeg"
     },
     {
-        "id": "item_noise_pulse_smartwatch",
-        "title": "Noise ColorFit Pulse 2 Max 1.85'' HD Display Smart Watch (BT Calling, 550 Nits)",
+        "id": "meesho_cotton_kurti_combo",
+        "platform": "Meesho",
+        "store_badge": "🌸 MEESHO MEGA LOOT",
+        "title": "Women Pure Cotton Printed Straight Kurta & Pant Set (Pack of 1)",
+        "price": "₹299",
+        "mrp": "₹999",
+        "discount": "70% OFF",
+        "url": "https://www.meesho.com/women-cotton-kurta-set/p/4v919z",
+        "image_url": "https://images.meesho.com/images/products/317584859/1_512.jpg"
+    },
+    {
+        "id": "myntra_hrx_running_shoes",
+        "platform": "Myntra",
+        "store_badge": "👟 MYNTRA FASHION DEAL",
+        "title": "HRX by Hrithik Roshan Men Grey & Black Running Shoes",
+        "price": "₹749",
+        "mrp": "₹2,799",
+        "discount": "73% OFF",
+        "url": "https://www.myntra.com/sports-shoes/hrx-by-hrithik-roshan/hrx-men-grey-mesh-running-shoes/14682498/buy",
+        "image_url": "https://assets.myntassets.com/h_720,q_90,w_540/v1/assets/images/14682498/2021/10/7/6ffcfd1b-7a6c-48d8-94ef-6faec18bfab21633604085448-HRX-by-Hrithik-Roshan-Men-Grey--Black-Running-Shoes-10216336040-1.jpg"
+    },
+    {
+        "id": "ajio_denim_jacket",
+        "platform": "Ajio",
+        "store_badge": "🧥 AJIO TRENDS DROP",
+        "title": "DNMX Men Slim Fit Washed Denim Jacket with Flap Pockets",
+        "price": "₹699",
+        "mrp": "₹2,299",
+        "discount": "69% OFF",
+        "url": "https://www.ajio.com/dnmx-men-washed-denim-jacket/p/460982542_blue",
+        "image_url": "https://assets.ajio.com/medias/sys_master/root/20230624/e95w/6496ec2fa9b42d15c9d96853/-473Wx593H-460982542-blue-MODEL.jpg"
+    },
+    {
+        "id": "amazon_noise_colorfit_pulse",
+        "platform": "Amazon",
+        "store_badge": "⚡ AMAZON LIGHTNING DEAL",
+        "title": "Noise ColorFit Pulse 2 Max 1.85'' HD Display Smart Watch (BT Calling)",
         "price": "₹1,199",
         "mrp": "₹5,999",
         "discount": "80% OFF",
@@ -93,58 +134,44 @@ VERIFIED_DEALS_CATALOG = [
         "image_url": "https://m.media-amazon.com/images/I/61akt30bJsL._SL1500_.jpg"
     },
     {
-        "id": "item_portronics_toad_mouse",
-        "title": "Portronics Toad 23 Wireless Optical Mouse (2.4GHz High Precision, Type-C Charging)",
-        "price": "₹279",
-        "mrp": "₹599",
-        "discount": "53% OFF",
-        "url": "https://www.amazon.in/dp/B0BG88TWW7",
-        "image_url": "https://m.media-amazon.com/images/I/51Z+859oZRL._SL1500_.jpg"
+        "id": "meesho_wireless_rgb_speaker",
+        "platform": "Meesho",
+        "store_badge": "🌸 MEESHO LOOT DEAL",
+        "title": "TG-113 Portable Wireless Bluetooth Speaker with RGB Bass",
+        "price": "₹249",
+        "mrp": "₹799",
+        "discount": "68% OFF",
+        "url": "https://www.meesho.com/wireless-bluetooth-speaker/p/3h182j",
+        "image_url": "https://images.meesho.com/images/products/214958195/vghso_512.jpg"
     },
     {
-        "id": "item_ptron_bassbuds_duo",
-        "title": "pTron Bassbuds Duo in-Ear TWS Earbuds (32H Playtime, Type-C Fast Charge, IPX4)",
-        "price": "₹599",
-        "mrp": "₹2,599",
-        "discount": "77% OFF",
-        "url": "https://www.amazon.in/dp/B098NS6PVG",
-        "image_url": "https://m.media-amazon.com/images/I/51HBom8xz7L._SL1100_.jpg"
-    },
-    {
-        "id": "item_ambrane_powerbank_10k",
-        "title": "Ambrane 10000mAh Slim Power Bank with 20W Fast Charging (Made in India)",
-        "price": "₹799",
-        "mrp": "₹1,999",
-        "discount": "60% OFF",
-        "url": "https://www.amazon.in/dp/B09V7CYVMD",
-        "image_url": "https://m.media-amazon.com/images/I/71lVwl3q-kL._SL1500_.jpg"
-    },
-    {
-        "id": "item_boult_z40_earbuds",
-        "title": "Boult Audio Z40 Ultra True Wireless Earbuds (60H Playtime, Dual Mic ENC)",
-        "price": "₹1,099",
-        "mrp": "₹4,999",
-        "discount": "78% OFF",
-        "url": "https://www.amazon.in/dp/B0B53DDZ4B",
-        "image_url": "https://m.media-amazon.com/images/I/61Ll9y+7ZmL._SL1500_.jpg"
+        "id": "amazon_sandisk_pendrive",
+        "platform": "Amazon",
+        "store_badge": "⚡ AMAZON PRICE DROP",
+        "title": "SanDisk Cruzer Blade 64GB USB 2.0 High Speed Flash Drive",
+        "price": "₹389",
+        "mrp": "₹1,100",
+        "discount": "65% OFF",
+        "url": "https://www.amazon.in/dp/B0083PR5VC",
+        "image_url": "https://m.media-amazon.com/images/I/61DjwgS4cbL._SL1500_.jpg"
     }
 ]
 
-# --- Direct Safe Image Downloader ---
+# --- Direct Safe Image Streamer ---
 def download_image_stream(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code == 200 and len(res.content) > 1500:
+        if res.status_code == 200 and len(res.content) > 1000:
             bio = io.BytesIO(res.content)
             bio.name = "product.jpg"
             return bio
     except Exception as e:
-        print(f"Image fetch error for {url}: {e}")
+        print(f"Image load error for {url}: {e}")
     return None
 
-# --- Channel Post Handler ---
+# --- Channel Broadcaster ---
 async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
-    deals = VERIFIED_DEALS_CATALOG.copy()
+    deals = MULTI_PLATFORM_CATALOG.copy()
     random.shuffle(deals)
     posted_count = 0
     err_message = None
@@ -153,20 +180,21 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         if not force and is_already_posted(deal["id"]):
             continue
 
-        deal_url = get_clean_amazon_affiliate_url(deal["url"])
+        deal_url = get_clean_deal_link(deal["platform"], deal["url"])
+        safe_badge = html.escape(deal['store_badge'])
         safe_title = html.escape(deal['title'])
         price_text = html.escape(deal['price'])
         mrp_text = html.escape(deal['mrp'])
         discount_text = html.escape(deal['discount'])
 
         caption = (
-            f"🔥 <b>SUPER LOOT DEAL ({discount_text})</b> 🔥\n\n"
+            f"🔥 <b>{safe_badge} ({discount_text})</b> 🔥\n\n"
             f"📦 <b>{safe_title}</b>\n\n"
             f"🔻 MRP: <s>{mrp_text}</s>\n"
             f"💥 <b>Offer Price: {price_text}</b>\n\n"
-            f"⚡ <i>Limited Stock Offer! Jaldi order karein!</i>"
+            f"⚡ <i>Limited Stock Offer! Jaldi Grab Karein!</i>"
         )
-        btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=deal_url)]])
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton(f"🛒 Buy on {deal['platform']} / Grab Deal", url=deal_url)]])
 
         try:
             img_file = download_image_stream(deal["image_url"])
@@ -194,25 +222,25 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
                 break
         except Exception as e:
             err_message = str(e)
-            print(f"Telegram Post Error: {e}")
+            print(f"Post error: {e}")
             break
 
     if chat_to_notify:
         if err_message:
             await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: <code>{html.escape(err_message)}</code>", parse_mode="HTML")
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Verified Deals channel mein post ho chuki hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Multi-Platform Deals channel mein post ho chuki hain!")
         else:
-            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Deals already posted. Nayi deal aate hi auto post hogi.")
+            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest deals already posted hain. Nayi deal aane par auto post ho jayegi.")
 
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     await post_deals_to_channel(context.bot, force=False)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 <b>Loot Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant 2 deals post karein\n• <code>/reset</code> - Database reset karein", parse_mode="HTML")
+    await update.message.reply_text("👋 <b>Multi-Platform Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant 2 multi-platform deals post karein\n• <code>/reset</code> - Reset deals cache", parse_mode="HTML")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Deals fetch karke channel par post ki ja rahi hain...")
+    await update.message.reply_text("⏳ Multi-Platform deals fetch karke channel par post ki ja rahi hain...")
     await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -243,7 +271,7 @@ def main():
     app.add_handler(CommandHandler("postnow", postnow_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
 
-    # Auto job runs every 5 minutes
+    # Auto job har 5 minute mein background mein run hoga
     app.job_queue.run_repeating(auto_job, interval=300, first=5)
 
     print("Bot is polling...")
