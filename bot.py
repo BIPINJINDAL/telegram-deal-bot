@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -15,6 +16,12 @@ AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
 admin_env = os.getenv("ADMIN_ID", "0").strip()
 ADMIN_ID = int(admin_env) if admin_env.isdigit() else 0
 PORT = int(os.getenv("PORT", 8080))
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+}
 
 # --- Database ---
 def init_db():
@@ -44,77 +51,82 @@ def clean_price(text):
     except:
         return None
 
-# --- 100% Working Amazon & Flipkart Scraper ---
-def get_product_data(raw_url):
-    platform = "flipkart" if "flipkart" in raw_url.lower() else "amazon"
-    
-    # 1. Clean Amazon ASIN URL
-    clean_url = raw_url
-    if platform == "amazon":
-        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', raw_url)
-        if asin_match:
-            clean_url = f"https://www.amazon.in/dp/{asin_match.group(1)}"
-        else:
-            clean_url = raw_url.split('?')[0]
-
-    title = "Product Deal"
-    price = None
-    image_url = ""
-
-    # Method 1: Microlink Real-Browser Gateway (Bypasses Captchas)
+# --- Flipkart Scraper Engine ---
+def get_flipkart_data(url):
     try:
-        api_url = f"https://api.microlink.io?url={requests.utils.quote(clean_url)}&headers[user-agent]=Mozilla/5.0"
-        res = requests.get(api_url, timeout=20).json()
-        
-        if res.get("status") == "success" and "data" in res:
-            data = res["data"]
-            title = data.get("title", title).split(" : Amazon.in")[0].strip()
-            
-            if "image" in data and data["image"]:
-                image_url = data["image"].get("url", "")
+        session = requests.Session()
+        res = session.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
+        final_url = res.url.split('?')[0]
+        soup = BeautifulSoup(res.text, "html.parser")
 
-            # Extract price from description or publisher fields
-            desc = data.get("description", "")
-            matches = re.findall(r'(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{2})?)', desc, re.IGNORECASE)
-            if matches:
-                p = clean_price(matches[0])
+        title = "Flipkart Deal"
+        price = None
+        image_url = ""
+
+        # 1. Price Selectors (Flipkart current classes + fallbacks)
+        price_tags = [
+            soup.find("div", {"class": "Nx9bqj"}),
+            soup.find("div", {"class": "_30jeq3"}),
+            soup.find("div", {"class": "hl05eU"}),
+            soup.find("div", {"class": "_25b18c"})
+        ]
+        for tag in price_tags:
+            if tag:
+                p = clean_price(tag.get_text())
                 if p and p > 10:
                     price = p
-    except Exception as e:
-        print(f"Microlink Error: {e}")
-
-    # Method 2: Fallback via Jina Reader Engine
-    if not price:
-        try:
-            jina_url = f"https://r.jina.ai/{clean_url}"
-            headers = {"User-Agent": "Mozilla/5.0", "X-Target-Selector": "body"}
-            res = requests.get(jina_url, headers=headers, timeout=15)
-            text = res.text
-
-            t_match = re.search(r'Title:\s*(.+)', text)
-            if t_match and title == "Product Deal":
-                title = t_match.group(1).split(" : Amazon.in")[0].strip()
-
-            matches = re.findall(r'(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{2})?)', text, re.IGNORECASE)
-            for m in matches:
-                p = clean_price(m)
-                if p and 50 <= p <= 1000000:
-                    price = p
                     break
-        except Exception as e:
-            print(f"Jina Error: {e}")
 
-    if price:
-        return {"title": title, "price": price, "image_url": image_url, "url": clean_url, "platform": platform}
-    
+        # 2. JSON Embedded Fallback if HTML class changed
+        if not price:
+            matches = re.findall(r'"pricing":\{"finalPrice":\{"value":([0-9.]+)', res.text)
+            if not matches:
+                matches = re.findall(r'"price":([0-9]+)', res.text)
+            if matches:
+                price = float(matches[0])
+
+        # 3. Product Title
+        title_tags = [
+            soup.find("span", {"class": "VU-ZEz"}),
+            soup.find("span", {"class": "B_NuCI"}),
+            soup.find("h1", {"class": "_6EBuvT"}),
+            soup.find("h1")
+        ]
+        for t in title_tags:
+            if t and t.get_text().strip():
+                title = t.get_text().strip()
+                break
+
+        # 4. Product Image
+        img_tags = [
+            soup.find("img", {"class": "DByuf4"}),
+            soup.find("img", {"class": "_396cs4"}),
+            soup.find("img", {"class": "_2r_T1I"})
+        ]
+        for img in img_tags:
+            if img and img.get("src"):
+                image_url = img.get("src")
+                break
+
+        if price:
+            return {
+                "title": title,
+                "price": price,
+                "image_url": image_url,
+                "url": final_url,
+                "platform": "flipkart"
+            }
+    except Exception as e:
+        print(f"Flipkart Scrape Error: {e}")
     return None
 
 def make_link(url, platform):
-    if platform == "amazon":
+    if platform == "flipkart":
+        # EarnKaro / Cuelinks affiliate link template
+        return f"https://ekaro.in/enkr?url={requests.utils.quote(url)}"
+    elif platform == "amazon":
         sep = "&" if "?" in url else "?"
         return f"{url}{sep}tag={AMAZON_TAG}"
-    elif platform == "flipkart":
-        return f"https://ekaro.in/enkr?url={url}"
     return url
 
 # --- Bot Commands ---
@@ -128,9 +140,9 @@ async def handle_tracking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url_match:
         if msg_text.startswith('/start'):
             await update.message.reply_text(
-                "👋 **Deal Tracker Bot Active!**\n\n"
-                "Track karne ke liye link aur target price bhejein:\n"
-                "`/track https://www.amazon.in/dp/B0FYGBSKFB 70000`",
+                "👋 **Flipkart & Deals Tracker Bot Active!**\n\n"
+                "Track karne ke liye Flipkart link aur target price bhejein:\n"
+                "`/track https://www.flipkart.com/apple-iphone-15-black-128-gb/p/itm6ac6485515ae4 65000`",
                 parse_mode="Markdown"
             )
         return
@@ -140,16 +152,16 @@ async def handle_tracking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Extract Target Price
     numbers = re.findall(r'\b\d+(?:\.\d+)?\b', msg_text.replace(url, ''))
     if not numbers:
-        await update.message.reply_text("⚠️ Kripya link ke sath **Target Price** bhi likhein (e.g. `70000`).")
+        await update.message.reply_text("⚠️ Kripya link ke sath **Target Price** bhi dalein (e.g. `65000`).")
         return
 
     target_price = float(numbers[-1])
-    status_msg = await update.message.reply_text("⏳ Amazon price verify ho rahi hai...")
+    status_msg = await update.message.reply_text("⏳ Flipkart se price verify ho rahi hai...")
 
-    data = get_product_data(url)
+    data = get_flipkart_data(url)
 
     if not data or not data["price"]:
-        await status_msg.edit_text("❌ Price fetch nahi ho saki. Product link check karein.")
+        await status_msg.edit_text("❌ Price fetch nahi ho saki. Valid Flipkart product link dalein.")
         return
 
     clean_url = data["url"]
@@ -162,13 +174,13 @@ async def handle_tracking(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await status_msg.edit_text(
             f"✅ **Tracking Started Successfully!**\n\n"
-            f"📦 **Product:** {data['title'][:65]}...\n"
+            f"📦 **Product:** {data['title'][:60]}...\n"
             f"💰 **Current Price:** ₹{data['price']:,.0f}\n"
             f"🎯 **Target Price:** ₹{target_price:,.0f}\n\n"
-            f"⚡ Jaise hi price ₹{target_price:,.0f} ya usse kam hogi, bot seedha channel mein post kar dega!"
+            f"⚡ Price ₹{target_price:,.0f} ya usse kam hote hi bot channel me post kar dega!"
         )
     except sqlite3.IntegrityError:
-        await status_msg.edit_text("⚠️ Ye product already tracking list mein active hai.")
+        await status_msg.edit_text("⚠️ Ye product already tracking list mein hai.")
     finally:
         conn.close()
 
@@ -180,7 +192,7 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
     products = c.fetchall()
 
     for prod_id, platform, title, url, target_price, last_price, img_url in products:
-        data = get_product_data(url)
+        data = get_flipkart_data(url)
         if not data or not data["price"]:
             continue
 
@@ -190,11 +202,11 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
             buy_link = make_link(url, platform)
 
             caption = (
-                f"🔥 **PRICE DROP ALERT!** 🔥\n\n"
+                f"🔥 **FLIPKART PRICE DROP ALERT!** 🔥\n\n"
                 f"📦 **{title[:80]}**\n\n"
                 f"🔻 Purani Price: ~~₹{last_price:,.0f}~~\n"
                 f"💥 **Deal Price: ₹{curr_price:,.0f}** {f'({discount}% OFF)' if discount > 0 else ''}\n\n"
-                f"⚡ *Limited Stock! Deal grab karein.*"
+                f"⚡ *Limited Stock Deal! Jaldi order karein.*"
             )
 
             btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Check Deal", url=buy_link)]])
@@ -206,14 +218,14 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=btn, parse_mode="Markdown")
             except Exception as e:
-                print(f"Telegram Post Error: {e}")
+                print(f"Telegram Broadcast Error: {e}")
 
             c.execute("UPDATE products SET last_price = ? WHERE id = ?", (curr_price, prod_id))
             conn.commit()
 
     conn.close()
 
-# --- Render Keep-Alive Server ---
+# --- Health Check Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -240,7 +252,7 @@ def main():
     
     app.job_queue.run_repeating(monitor_deals, interval=900, first=15)
 
-    print("Bot is fully running on Render...")
+    print("Bot is live...")
     app.run_polling()
 
 if __name__ == "__main__":
