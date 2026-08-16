@@ -1,11 +1,14 @@
 import os
-import time
+import html
+import asyncio
 import sqlite3
 import threading
 import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 from bs4 import BeautifulSoup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -56,12 +59,20 @@ def mark_as_posted(deal_id):
     finally:
         conn.close()
 
-# --- Affiliate Generator ---
+def clear_db():
+    conn = sqlite3.connect("deals.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM posted_deals")
+    conn.commit()
+    conn.close()
+
+# --- Affiliate Link Builder ---
 def convert_to_affiliate(original_url):
     if not original_url:
         return "https://www.amazon.in"
     if EARNKARO_ID:
-        return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}&r={EARNKARO_ID}"
+        encoded = requests.utils.quote(original_url)
+        return f"https://ekaro.in/enkr?url={encoded}&r={EARNKARO_ID}"
     if "amazon.in" in original_url or "amzn.to" in original_url:
         sep = "&" if "?" in original_url else "?"
         return f"{original_url}{sep}tag={AMAZON_TAG}"
@@ -69,13 +80,12 @@ def convert_to_affiliate(original_url):
         return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}"
     return original_url
 
-# --- Live Deals Scraper ---
+# --- Live Deals Fetcher ---
 def fetch_live_deals():
     deals = []
     feeds = [
         "https://indiafreestuff.in/feed",
-        "https://www.offernloot.com/feed",
-        "https://dealhunt.in/feed"
+        "https://www.offernloot.com/feed"
     ]
 
     for feed in feeds:
@@ -83,7 +93,7 @@ def fetch_live_deals():
             res = requests.get(feed, headers=HEADERS, timeout=8)
             if res.status_code == 200:
                 root = ET.fromstring(res.content)
-                for item in root.findall('.//item')[:10]:
+                for item in root.findall('.//item')[:6]:
                     title = item.find('title').text.strip() if item.find('title') is not None else ""
                     link = item.find('link').text.strip() if item.find('link') is not None else ""
                     desc = item.find('description').text if item.find('description') is not None else ""
@@ -91,10 +101,11 @@ def fetch_live_deals():
                     soup = BeautifulSoup(desc, "html.parser")
                     img_tag = soup.find("img")
                     img_url = img_tag.get("src") if img_tag else ""
-                    
-                    enclosure = item.find('enclosure')
-                    if not img_url and enclosure is not None:
-                        img_url = enclosure.get('url', '')
+
+                    if not img_url:
+                        enclosure = item.find('enclosure')
+                        if enclosure is not None:
+                            img_url = enclosure.get('url', '')
 
                     store_link = None
                     for a in soup.find_all("a", href=True):
@@ -113,81 +124,112 @@ def fetch_live_deals():
                             "image": img_url
                         })
         except Exception as e:
-            print(f"Scraper warning: {e}")
+            print(f"Feed parse error: {e}")
 
     return deals
 
-# --- Direct Telegram Broadcaster (No Conflicts) ---
-def send_telegram_deal(title, image_url, buy_url):
-    caption = (
-        f"🔥 *SUPER LOOT DEAL* 🔥\n\n"
-        f"📦 {title}\n\n"
-        f"⚡ *Limited Period Deal! Grab Now!*"
-    )
-    inline_keyboard = {
-        "inline_keyboard": [[{"text": "🛒 Buy Now / Loot Deal", "url": buy_url}]]
-    }
+# --- Posting Function ---
+async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
+    deals = fetch_live_deals()
+    posted_count = 0
+    err_message = None
 
-    if image_url and image_url.startswith("http"):
-        payload = {
-            "chat_id": CHANNEL_ID,
-            "photo": image_url,
-            "caption": caption,
-            "parse_mode": "Markdown",
-            "reply_markup": inline_keyboard
-        }
-        res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", json=payload, timeout=10)
-    else:
-        payload = {
-            "chat_id": CHANNEL_ID,
-            "text": caption,
-            "parse_mode": "Markdown",
-            "reply_markup": inline_keyboard
-        }
-        res = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
-    
-    return res.status_code == 200
+    for deal in deals:
+        if not force and is_already_posted(deal["id"]):
+            continue
 
-def post_deals_loop():
-    while True:
+        aff_link = convert_to_affiliate(deal["url"])
+        safe_title = html.escape(deal['title'])
+        caption = (
+            f"🔥 <b>SUPER LOOT DEAL</b> 🔥\n\n"
+            f"📦 <b>{safe_title}</b>\n\n"
+            f"⚡ <i>Limited Period Price Drop! Grab Now!</i>"
+        )
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=aff_link)]])
+
         try:
-            deals = fetch_live_deals()
-            for deal in deals:
-                if not is_already_posted(deal["id"]):
-                    aff_link = convert_to_affiliate(deal["url"])
-                    clean_title = deal['title'].replace('*', '').replace('_', '')
-                    
-                    success = send_telegram_deal(clean_title, deal["image"], aff_link)
-                    if success:
-                        mark_as_posted(deal["id"])
-                        print(f"Posted: {clean_title}")
-                        time.sleep(3)
-        except Exception as e:
-            print(f"Loop error: {e}")
-        
-        # Har 5 minute (300 sec) mein internet scan karega
-        time.sleep(300)
+            if deal.get("image") and deal["image"].startswith("http"):
+                await bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=deal["image"],
+                    caption=caption,
+                    reply_markup=btn,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=caption,
+                    reply_markup=btn,
+                    parse_mode="HTML"
+                )
+            mark_as_posted(deal["id"])
+            posted_count += 1
+            await asyncio.sleep(2)
 
-# --- Web Server for UptimeRobot ---
+            if force and posted_count >= 5:
+                break
+        except Exception as e:
+            err_message = str(e)
+            print(f"Channel post error: {e}")
+            break
+
+    if chat_to_notify:
+        if err_message:
+            await bot.send_message(
+                chat_id=chat_to_notify,
+                text=f"❌ Error: <code>{html.escape(err_message)}</code>",
+                parse_mode="HTML"
+            )
+        elif posted_count > 0:
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Nayi Deals channel mein post ho chuki hain!")
+        else:
+            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Deals already posted hain. Nayi deal aate hi auto post hogi.")
+
+async def auto_job(context: ContextTypes.DEFAULT_TYPE):
+    await post_deals_to_channel(context.bot, force=False)
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 <b>Auto Loot Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant deals post karein\n• <code>/reset</code> - Cache reset karein", parse_mode="HTML")
+
+async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Live deals fetch karke channel par post ki ja rahi hain...")
+    await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
+
+async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_db()
+    await update.message.reply_text("🧹 Cache reset done! Ab `/postnow` karein.")
+
+# --- Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Engine Live 24/7!")
+        self.wfile.write(b"Bot Engine 24/7 Live!")
     def log_message(self, format, *args):
         return
+
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
 
 def main():
     init_db()
     
-    # Start posting engine in background
-    poster_thread = threading.Thread(target=post_deals_loop, daemon=True)
-    poster_thread.start()
+    # Start web server thread for UptimeRobot
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
 
-    # Start health check server
-    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    print("Server running on port", PORT)
-    server.serve_forever()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("postnow", postnow_cmd))
+    app.add_handler(CommandHandler("reset", reset_cmd))
+
+    # Auto run every 5 mins
+    app.job_queue.run_repeating(auto_job, interval=300, first=5)
+
+    print("Bot is running...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
