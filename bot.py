@@ -5,10 +5,11 @@ import sqlite3
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# --- Configuration ---
+# --- Environment Variables ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
@@ -27,65 +28,93 @@ def init_db():
             title TEXT,
             url TEXT UNIQUE,
             target_price REAL,
-            last_price REAL
+            last_price REAL,
+            image_url TEXT
         )
     """)
     conn.commit()
     conn.close()
 
-# --- Amazon Anti-Bot Bypass Scraper ---
-def get_amazon_data(url):
+def clean_price(text):
+    if not text:
+        return None
+    val = re.sub(r"[^\d.]", "", text.replace(",", ""))
     try:
-        # Extract ASIN / Clean Link
-        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
-        if asin_match:
-            clean_url = f"https://www.amazon.in/dp/{asin_match.group(1)}"
-        else:
-            clean_url = url.split('?')[0]
+        f = float(val)
+        return f if f > 0 else None
+    except:
+        return None
 
-        # Use Free Web Reader Gateway to bypass datacenter IP captcha
-        gateway_url = f"https://r.jina.ai/{clean_url}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "X-Target-Selector": "body"
+# --- Multi-Method Anti-Bot Amazon Scraper ---
+def get_amazon_data(raw_url):
+    # 1. Extract ASIN
+    asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', raw_url)
+    asin = asin_match.group(1) if asin_match else None
+    clean_url = f"https://www.amazon.in/dp/{asin}" if asin else raw_url.split('?')[0]
+
+    title = "Amazon Product"
+    price = None
+    image_url = ""
+
+    # Method 1: Direct Mobile Emulation (Bypasses most desktop bot-blocks)
+    try:
+        mobile_headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+            "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
-        
-        res = requests.get(gateway_url, headers=headers, timeout=25)
+        res = requests.get(clean_url, headers=mobile_headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            
+            # Title
+            t_elem = soup.find("span", {"id": "title"}) or soup.find("span", {"id": "productTitle"}) or soup.find("h1")
+            if t_elem:
+                title = t_elem.get_text().strip()
+                
+            # Price
+            for sel in [".apexPriceToPay .a-offscreen", ".a-price .a-offscreen", ".a-price-whole", "#corePrice_feature_div"]:
+                tag = soup.select_one(sel)
+                if tag:
+                    parsed = clean_price(tag.get_text())
+                    if parsed:
+                        price = parsed
+                        break
+
+            # Image
+            img = soup.find("img", {"id": "landingImage"}) or soup.find("img", {"class": "a-dynamic-image"})
+            if img:
+                image_url = img.get("src", "")
+                
+            if price:
+                return {"title": title, "price": price, "image_url": image_url, "url": clean_url}
+    except Exception as e:
+        print(f"Direct Scrape Method Failed: {e}")
+
+    # Method 2: Free Cloud Proxy Fallback
+    try:
+        proxy_url = f"https://r.jina.ai/{clean_url}"
+        res = requests.get(proxy_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         text = res.text
 
-        # Extract Title
-        title = "Amazon Product"
-        title_match = re.search(r'Title:\s*(.+)', text)
-        if title_match:
-            title = title_match.group(1).strip()
-        else:
-            first_line = [l.strip() for l in text.split('\n') if l.strip() and not l.startswith('http')]
-            if first_line:
-                title = first_line[0][:80]
+        # Extract Title from proxy text
+        t_match = re.search(r'Title:\s*(.+)', text)
+        if t_match:
+            title = t_match.group(1).strip()
 
-        # Extract Price (Regex matches ₹ 19,990 or Rs. 19990)
-        price = None
-        price_patterns = [
-            r'₹\s*([0-9,]+(?:\.[0-9]{2})?)',
-            r'INR\s*([0-9,]+(?:\.[0-9]{2})?)',
-            r'Rs\.?\s*([0-9,]+(?:\.[0-9]{2})?)'
-        ]
-
-        for pattern in price_patterns:
-            matches = re.findall(pattern, text)
-            for m in matches:
-                clean_val = float(m.replace(',', ''))
-                if 10 <= clean_val <= 500000:  # Filters valid product prices
-                    price = clean_val
-                    break
-            if price:
+        # Extract Price from text
+        matches = re.findall(r'(?:₹|Rs\.?|INR)\s*([0-9,]+(?:\.[0-9]{2})?)', text, re.IGNORECASE)
+        for m in matches:
+            val = float(m.replace(',', ''))
+            if 20 <= val <= 1000000:
+                price = val
                 break
 
         if price:
-            return {"title": title, "price": price, "url": clean_url}
-
+            return {"title": title, "price": price, "image_url": image_url, "url": clean_url}
     except Exception as e:
-        print(f"Scrape Error: {e}")
+        print(f"Proxy Method Failed: {e}")
+
     return None
 
 def make_link(url, platform):
@@ -96,59 +125,74 @@ def make_link(url, platform):
         return f"https://ekaro.in/enkr?url={url}"
     return url
 
-# --- Telegram Commands ---
-async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Bot Message & Command Handler ---
+async def handle_tracking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_text = update.message.text.strip()
+    
+    # Check Admin permission
     if ADMIN_ID != 0 and update.effective_user.id != ADMIN_ID:
         return
 
-    text = update.message.text.strip().split()
-    if len(text) < 4:
-        await update.message.reply_text("Format (single line):\n`/track amazon <URL> <TARGET_PRICE>`", parse_mode="Markdown")
+    # Extract URL from anywhere in the message
+    url_match = re.search(r'(https?://[^\s]+)', msg_text)
+    if not url_match:
+        if msg_text.startswith('/start'):
+            await update.message.reply_text(
+                "👋 **Deal Tracker Bot Active!**\n\n"
+                "Kisi bhi product ko track karne ke liye link aur target price bhejein:\n"
+                "`/track amazon https://www.amazon.in/dp/B0863TXGM3 25000`",
+                parse_mode="Markdown"
+            )
         return
 
-    platform = text[1].lower()
-    url = text[2]
-    try:
-        target_price = float(text[3].replace(",", ""))
-    except ValueError:
-        await update.message.reply_text("❌ Target price number format me dalein.")
-        return
+    url = url_match.group(1)
+    
+    # Extract Platform
+    platform = "amazon" if "amazon" in url.lower() else ("flipkart" if "flipkart" in url.lower() else "amazon")
 
-    status_msg = await update.message.reply_text("⏳ Product verify kiya ja raha hai (Anti-bot bypass)...")
+    # Extract Target Price (last number in the message)
+    numbers = re.findall(r'\b\d+(?:\.\d+)?\b', msg_text.replace(url, ''))
+    if not numbers:
+        await update.message.reply_text("⚠️ Kripya link ke sath **Target Price** bhi likhein.\nExample:\n`/track amazon <URL> 25000`")
+        return
+    
+    target_price = float(numbers[-1])
+
+    status_msg = await update.message.reply_text("⏳ Product verify ho raha hai...")
 
     data = get_amazon_data(url)
 
     if not data or not data["price"]:
-        await status_msg.edit_text("❌ Price fetch nahi hui. URL check karein ya thodi der baad try karein.")
+        await status_msg.edit_text("❌ Price fetch nahi ho saki. Kripya check karein ki product stock mein hai ya nahi.")
         return
 
     clean_url = data["url"]
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO products (platform, title, url, target_price, last_price) VALUES (?, ?, ?, ?, ?)",
-                  (platform, data["title"], clean_url, target_price, data["price"]))
+        c.execute("INSERT INTO products (platform, title, url, target_price, last_price, image_url) VALUES (?, ?, ?, ?, ?, ?)",
+                  (platform, data["title"], clean_url, target_price, data["price"], data["image_url"]))
         conn.commit()
         await status_msg.edit_text(
             f"✅ **Tracking Started!**\n\n"
             f"📦 **Title:** {data['title'][:65]}...\n"
             f"💰 **Current Price:** ₹{data['price']:,.0f}\n"
             f"🎯 **Target Price:** ₹{target_price:,.0f}\n\n"
-            f"⚡ Jaise hi price target par aayegi, bot channel me deal post kar dega."
+            f"⚡ Price target par aate hi bot channel mein post kar dega!"
         )
     except sqlite3.IntegrityError:
-        await status_msg.edit_text("⚠️ Ye product already tracking list mein hai.")
+        await status_msg.edit_text("⚠️ Ye product pehle se tracking database mein hai.")
     finally:
         conn.close()
 
-# --- Monitor Routine ---
+# --- Auto Price Monitor ---
 async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
-    c.execute("SELECT id, platform, title, url, target_price, last_price FROM products")
+    c.execute("SELECT id, platform, title, url, target_price, last_price, image_url FROM products")
     products = c.fetchall()
 
-    for prod_id, platform, title, url, target_price, last_price in products:
+    for prod_id, platform, title, url, target_price, last_price, img_url in products:
         data = get_amazon_data(url)
         if not data or not data["price"]:
             continue
@@ -163,13 +207,17 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
                 f"📦 **{title[:80]}**\n\n"
                 f"🔻 Purani Price: ~~₹{last_price:,.0f}~~\n"
                 f"💥 **Deal Price: ₹{curr_price:,.0f}** {f'({discount}% OFF)' if discount > 0 else ''}\n\n"
-                f"⚡ *Limited Time Deal! Grab Now!*"
+                f"⚡ *Limited Time Deal! Jaldi order karein.*"
             )
 
             btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Check Deal", url=buy_link)]])
 
             try:
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=btn, parse_mode="Markdown")
+                display_img = data.get("image_url") or img_url
+                if display_img:
+                    await context.bot.send_photo(chat_id=CHANNEL_ID, photo=display_img, caption=caption, reply_markup=btn, parse_mode="Markdown")
+                else:
+                    await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=btn, parse_mode="Markdown")
             except Exception as e:
                 print(f"Telegram Broadcast Error: {e}")
 
@@ -178,12 +226,12 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# --- Health Check Server ---
+# --- Health Check Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is active 24/7!")
+        self.wfile.write(b"Bot is live 24/7!")
 
     def log_message(self, format, *args):
         return
@@ -199,10 +247,15 @@ def main():
     web_thread.start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("track", track_cmd))
-    app.job_queue.run_repeating(monitor_deals, interval=900, first=10)
+    
+    # Handlers for both /track command and direct link messages
+    app.add_handler(CommandHandler("track", handle_tracking))
+    app.add_handler(CommandHandler("start", handle_tracking))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_tracking))
+    
+    app.job_queue.run_repeating(monitor_deals, interval=900, first=15)
 
-    print("Bot is live on Free Web Service...")
+    print("Bot is fully running on Render...")
     app.run_polling()
 
 if __name__ == "__main__":
