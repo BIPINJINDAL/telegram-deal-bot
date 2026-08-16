@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- Configuration ---
+# --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
@@ -18,10 +18,14 @@ ADMIN_ID = int(admin_env) if admin_env.isdigit() else 0
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1"
 }
 
-# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -43,19 +47,50 @@ def clean_price(text):
     if not text:
         return None
     val = re.sub(r"[^\d.]", "", text.replace(",", ""))
-    return float(val) if val else None
+    try:
+        return float(val)
+    except:
+        return None
 
 def get_amazon_data(url):
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        # Clean URL to standard product format
+        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
+        if asin_match:
+            clean_url = f"https://www.amazon.in/dp/{asin_match.group(1)}"
+        else:
+            clean_url = url.split('?')[0]
+
+        session = requests.Session()
+        res = session.get(clean_url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(res.text, "html.parser")
-        title_tag = soup.find("span", {"id": "productTitle"})
+        
+        # Title
+        title_tag = soup.find("span", {"id": "productTitle"}) or soup.find("h1")
         title = title_tag.get_text().strip() if title_tag else "Amazon Product"
-        price_tag = soup.find("span", {"class": "a-price-whole"})
-        price = clean_price(price_tag.get_text()) if price_tag else None
-        img_tag = soup.find("img", {"id": "landingImage"})
+        
+        # Price Selectors (Multiple Fallbacks)
+        price = None
+        price_tags = [
+            soup.find("span", {"class": "a-price-whole"}),
+            soup.find("span", {"id": "priceblock_ourprice"}),
+            soup.find("span", {"id": "priceblock_dealprice"}),
+            soup.find("span", {"class": "a-offscreen"}),
+            soup.find("div", {"id": "corePrice_feature_div"})
+        ]
+        
+        for tag in price_tags:
+            if tag:
+                parsed = clean_price(tag.get_text())
+                if parsed and parsed > 0:
+                    price = parsed
+                    break
+        
+        # Image
+        img_tag = soup.find("img", {"id": "landingImage"}) or soup.find("img", {"id": "imgBlkFront"})
         img_url = img_tag.get("src") if img_tag else ""
-        return {"title": title, "price": price, "image_url": img_url}
+        
+        return {"title": title, "price": price, "image_url": img_url, "url": clean_url}
     except Exception as e:
         print(f"Scrape Error: {e}")
         return None
@@ -73,27 +108,42 @@ async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ADMIN_ID != 0 and update.effective_user.id != ADMIN_ID:
         return
 
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text("Format: `/track amazon <URL> <TARGET_PRICE>`", parse_mode="Markdown")
+    text = update.message.text.strip().split()
+    if len(text) < 4:
+        await update.message.reply_text("Format (single line):\n`/track amazon <URL> <TARGET_PRICE>`", parse_mode="Markdown")
         return
 
-    platform, url, target_price = args[0].lower(), args[1], float(args[2])
+    platform = text[1].lower()
+    url = text[2]
+    try:
+        target_price = float(text[3].replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("❌ Target price sahi number format mein daalein.")
+        return
+
+    await update.message.reply_text("⏳ Product check kiya ja raha hai...")
+
     data = get_amazon_data(url)
 
     if not data or not data["price"]:
-        await update.message.reply_text("❌ Price fetch nahi hui. URL check karein.")
+        await update.message.reply_text("❌ Price fetch nahi hui. Kripya valid product link dalein.")
         return
 
+    clean_url = data.get("url", url)
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
     try:
         c.execute("INSERT INTO products (platform, title, url, target_price, last_price, image_url) VALUES (?, ?, ?, ?, ?, ?)",
-                  (platform, data["title"], url, target_price, data["price"], data["image_url"]))
+                  (platform, data["title"], clean_url, target_price, data["price"], data["image_url"]))
         conn.commit()
-        await update.message.reply_text(f"✅ **Tracked:** {data['title'][:50]}...\nCurrent: ₹{data['price']} | Target: ₹{target_price}")
+        await update.message.reply_text(
+            f"✅ **Tracking Started!**\n\n"
+            f"📦 **Title:** {data['title'][:60]}...\n"
+            f"💰 **Current Price:** ₹{data['price']:,.0f}\n"
+            f"🎯 **Target Price:** ₹{target_price:,.0f}"
+        )
     except sqlite3.IntegrityError:
-        await update.message.reply_text("⚠️ Product already tracked.")
+        await update.message.reply_text("⚠️ Ye product pehle se tracking list mein hai.")
     finally:
         conn.close()
 
@@ -136,7 +186,6 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# --- Render Port Binding (Daemon Thread) ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -153,7 +202,6 @@ def run_health_server():
 def main():
     init_db()
 
-    # Web Server for Render
     web_thread = threading.Thread(target=run_health_server, daemon=True)
     web_thread.start()
 
