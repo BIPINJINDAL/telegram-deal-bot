@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 from bs4 import BeautifulSoup
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- Configuration ---
@@ -20,7 +20,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }
 
-# --- Database (Duplicate Deals Filter) ---
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -55,7 +55,7 @@ def mark_as_posted(deal_id, title, url):
     finally:
         conn.close()
 
-# --- Affiliate Link Converter ---
+# --- Affiliate Converter ---
 def convert_to_affiliate(original_url):
     if "amazon.in" in original_url or "amzn.to" in original_url:
         sep = "&" if "?" in original_url else "?"
@@ -64,33 +64,28 @@ def convert_to_affiliate(original_url):
         return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}"
     return original_url
 
-# --- Live Auto-Deal Feeds Fetcher ---
+# --- Live Deals Stream ---
 def fetch_trending_loot_deals():
     deals = []
-    
-    # Source 1: Live Deals XML Stream
     try:
         res = requests.get("https://www.desidime.com/feed", headers=HEADERS, timeout=12)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
-            for item in root.findall('.//item')[:15]:
+            for item in root.findall('.//item')[:10]:
                 deal_url = item.find('link').text.strip() if item.find('link') is not None else ""
                 title = item.find('title').text.strip() if item.find('title') is not None else ""
                 desc = item.find('description').text if item.find('description') is not None else ""
                 guid = item.find('guid').text if item.find('guid') is not None else deal_url
 
-                # Extract product image from description
                 soup = BeautifulSoup(desc, "html.parser")
                 img_tag = soup.find("img")
                 img_url = img_tag.get("src") if img_tag else ""
 
-                # Extract Direct Store Links (Amazon / Flipkart)
                 store_link_tag = soup.find("a", href=True)
                 target_url = store_link_tag['href'] if store_link_tag else deal_url
 
-                # Price / Discount Detection
                 discount_match = re.search(r'([0-9]{2}%|₹\s*[0-9,]+)', title)
-                badge = discount_match.group(1) if discount_match else "HOT DEAL"
+                badge = discount_match.group(1) if discount_match else "HOT LOOT"
 
                 if target_url and title:
                     deals.append({
@@ -101,34 +96,30 @@ def fetch_trending_loot_deals():
                         "badge": badge
                     })
     except Exception as e:
-        print(f"Feed 1 Fetch Error: {e}")
-
+        print(f"Fetch Error: {e}")
     return deals
 
-# --- Background Auto-Poster Routine ---
-async def auto_post_loot_deals(context: ContextTypes.DEFAULT_TYPE):
+# --- Core Posting Function ---
+async def post_deals_to_channel(bot):
     deals = fetch_trending_loot_deals()
-    
     for deal in deals:
         if is_already_posted(deal["id"]):
             continue
 
         affiliate_link = convert_to_affiliate(deal["url"])
-
         caption = (
-            f"🔥 **SUPER LOOT / PRICE DROP DEAL** 🔥\n\n"
+            f"🔥 **SUPER LOOT / PRICE DROP** 🔥\n\n"
             f"📦 **{deal['title']}**\n\n"
-            f"⚡ **Discount:** `{deal['badge']}`\n"
-            f"🚨 *Limited Quantity! Jaldi order karein before price goes up.*"
+            f"⚡ **Offer:** `{deal['badge']}`\n"
+            f"🚨 *Limited Time Deal! Grab Fast!*"
         )
-
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=affiliate_link)]
         ])
 
         try:
             if deal.get("image_url") and deal["image_url"].startswith("http"):
-                await context.bot.send_photo(
+                await bot.send_photo(
                     chat_id=CHANNEL_ID,
                     photo=deal["image_url"],
                     caption=caption,
@@ -136,28 +127,42 @@ async def auto_post_loot_deals(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             else:
-                await context.bot.send_message(
+                await bot.send_message(
                     chat_id=CHANNEL_ID,
                     text=caption,
                     reply_markup=keyboard,
                     parse_mode="Markdown"
                 )
 
-            # Mark deal as posted so it never duplicates
             mark_as_posted(deal["id"], deal["title"], deal["url"])
-
-            # Small delay between posts so Telegram rate-limit is avoided
-            await asyncio.sleep(5)
-
+            await asyncio.sleep(4)
         except Exception as e:
-            print(f"Telegram Auto-Post Error: {e}")
+            print(f"Telegram Post Error: {e}")
 
-# --- Render Port Binding (Keep-Alive) ---
+# --- Background Repeating Task ---
+async def auto_job(context: ContextTypes.DEFAULT_TYPE):
+    await post_deals_to_channel(context.bot)
+
+# --- Start & Force-Post Commands ---
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 **Auto Deals Bot Live Hai!**\n\n"
+        "Ye bot internet se live loot deals auto-fetch karke aapke channel par bhejta rahega.\n\n"
+        "👉 Turant deal channel par check karne ke liye send karein: `/postnow`",
+        parse_mode="Markdown"
+    )
+
+async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Live deals fetch karke channel par post ki ja rahi hain...")
+    await post_deals_to_channel(context.bot)
+    await update.message.reply_text("✅ Deals channel par successfully post ho gayi hain!")
+
+# --- Keep-Alive Health Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Auto Loot Deals Bot is running 24/7!")
+        self.wfile.write(b"Auto Deal Bot is Live 24/7!")
 
     def log_message(self, format, *args):
         return
@@ -173,11 +178,13 @@ def main():
     web_thread.start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("postnow", postnow_cmd))
 
-    # Har 10 minute me auto fetch karke nayi deals channel me post karega
-    app.job_queue.run_repeating(auto_post_loot_deals, interval=600, first=5)
+    # Run every 5 minutes (300 seconds), starting immediately (first=2)
+    app.job_queue.run_repeating(auto_job, interval=300, first=2)
 
-    print("Auto Deals Engine Active...")
+    print("Bot is live...")
     app.run_polling()
 
 if __name__ == "__main__":
