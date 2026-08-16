@@ -2,22 +2,26 @@ import os
 import re
 import asyncio
 import sqlite3
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 from bs4 import BeautifulSoup
-from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")
-AMAZON_TAG = os.getenv("AMAZON_TAG", "")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# --- Configuration ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
+AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
+admin_env = os.getenv("ADMIN_ID", "0").strip()
+ADMIN_ID = int(admin_env) if admin_env.isdigit() else 0
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -64,6 +68,7 @@ def make_link(url, platform):
         return f"https://ekaro.in/enkr?url={url}"
     return url
 
+# --- Telegram Commands ---
 async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ADMIN_ID != 0 and update.effective_user.id != ADMIN_ID:
         return
@@ -131,25 +136,30 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-async def handle_ping(request):
-    return web.Response(text="Bot is Active and Running 24/7!")
+# --- Render Port Binding (Daemon Thread) ---
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active 24/7!")
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
+    def log_message(self, format, *args):
+        return
+
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
 
 def main():
     init_db()
+
+    # Web Server for Render
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("track", track_cmd))
     app.job_queue.run_repeating(monitor_deals, interval=900, first=10)
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_web_server())
 
     print("Bot is live on Free Web Service...")
     app.run_polling()
