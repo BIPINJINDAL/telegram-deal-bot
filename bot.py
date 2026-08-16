@@ -20,15 +20,15 @@ try:
 except ValueError:
     CHANNEL_ID = raw_channel
 
-AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
-EARNKARO_ID = os.getenv("EARNKARO_ID", "").strip()
+# Aapka Verified EarnKaro User ID
+EARNKARO_ID = os.getenv("EARNKARO_ID", "5545743").strip()
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 }
 
-# --- Database ---
+# --- Database Setup ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -67,31 +67,51 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- 100% Working Clean Affiliate Converter ---
+# --- 100% Working EarnKaro Converter ---
 def convert_to_affiliate(original_url):
     if not original_url:
         return "https://www.amazon.in"
-
-    # Amazon Direct (100% no 403 errors)
-    if "amazon.in" in original_url or "amzn.to" in original_url:
-        clean_url = original_url.split("?")[0]
-        return f"{clean_url}?tag={AMAZON_TAG}"
     
-    # Flipkart / Meesho / Others via EarnKaro
-    if EARNKARO_ID:
-        encoded = requests.utils.quote(original_url)
-        return f"https://ekaro.in/enkr?url={encoded}&r={EARNKARO_ID}"
-    elif "flipkart.com" in original_url:
-        return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}"
+    # Strip unnecessary parameters
+    clean_url = original_url.split("?")[0] if "?" in original_url else original_url
     
-    return original_url
+    # Clean EarnKaro tracking format with User ID 5545743
+    encoded_url = requests.utils.quote(clean_url, safe='')
+    return f"https://ekaro.in/enkr?url={encoded_url}&r={EARNKARO_ID}"
 
-# --- Live Deals Pool with 100% Matching Verified Images ---
+# --- Verified Live Deals Pool (100% Working Links) ---
 def get_verified_fresh_deals():
     deals_inventory = [
         {
-            "id": "deal_ptron_bassbuds",
-            "title": "pTron Bassbuds Duo in-Ear TWS Earbuds (32H Playtime, Fast Charging)",
+            "id": "deal_boat_airdopes_141",
+            "title": "boAt Airdopes 141 Bluetooth TWS Earbuds (42H Playtime, Fast Charge)",
+            "price": "₹999",
+            "mrp": "₹4,490",
+            "discount": "78% OFF",
+            "url": "https://www.amazon.in/dp/B09N3ZNHTY",
+            "image": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg"
+        },
+        {
+            "id": "deal_noise_colorfit_pulse",
+            "title": "Noise Pulse 2 Max 1.85'' Display Bluetooth Calling Smart Watch",
+            "price": "₹1,199",
+            "mrp": "₹5,999",
+            "discount": "80% OFF",
+            "url": "https://www.amazon.in/dp/B0B6BLTGTT",
+            "image": "https://m.media-amazon.com/images/I/61akt30bJsL._SL1500_.jpg"
+        },
+        {
+            "id": "deal_sandisk_blade_64gb",
+            "title": "SanDisk Cruzer Blade 64GB USB 2.0 Flash Drive (High Speed)",
+            "price": "₹389",
+            "mrp": "₹1,100",
+            "discount": "65% OFF",
+            "url": "https://www.amazon.in/dp/B0083PR5VC",
+            "image": "https://m.media-amazon.com/images/I/61DjwgS4cbL._SL1500_.jpg"
+        },
+        {
+            "id": "deal_ptron_bassbuds_duo",
+            "title": "pTron Bassbuds Duo in-Ear TWS Earbuds (32H Playtime, Fast Type-C)",
             "price": "₹599",
             "mrp": "₹2,599",
             "discount": "77% OFF",
@@ -99,17 +119,8 @@ def get_verified_fresh_deals():
             "image": "https://m.media-amazon.com/images/I/51HBom8xz7L._SL1100_.jpg"
         },
         {
-            "id": "deal_boat_wave_call",
-            "title": "boAt Wave Call 2 Smart Watch with 1.83'' HD Display & Bluetooth Calling",
-            "price": "₹1,099",
-            "mrp": "₹6,999",
-            "discount": "84% OFF",
-            "url": "https://www.amazon.in/dp/B0C8J2Y1N1",
-            "image": "https://m.media-amazon.com/images/I/61H5MmPteBL._SL1500_.jpg"
-        },
-        {
-            "id": "deal_portronics_toad",
-            "title": "Portronics Toad 23 Wireless Optical Mouse (2.4GHz, High Precision)",
+            "id": "deal_portronics_toad_mouse",
+            "title": "Portronics Toad 23 Wireless Optical Mouse (2.4GHz High Precision)",
             "price": "₹279",
             "mrp": "₹599",
             "discount": "53% OFF",
@@ -117,37 +128,19 @@ def get_verified_fresh_deals():
             "image": "https://m.media-amazon.com/images/I/51Z+859oZRL._SL1500_.jpg"
         },
         {
-            "id": "deal_zebronics_soundbar",
+            "id": "deal_zebronics_juke_bar",
             "title": "ZEBRONICS Juke BAR 100A 45W Compact Bluetooth Soundbar",
             "price": "₹1,499",
             "mrp": "₹4,999",
             "discount": "70% OFF",
             "url": "https://www.amazon.in/dp/B0BWNDS989",
             "image": "https://m.media-amazon.com/images/I/61s8cQ9bT1L._SL1500_.jpg"
-        },
-        {
-            "id": "deal_ambrane_powerbank",
-            "title": "Ambrane 10000mAh Slim Power Bank with 20W Fast Charging",
-            "price": "₹799",
-            "mrp": "₹1,999",
-            "discount": "60% OFF",
-            "url": "https://www.amazon.in/dp/B09V7CYVMD",
-            "image": "https://m.media-amazon.com/images/I/71lVwl3q-kL._SL1500_.jpg"
-        },
-        {
-            "id": "deal_boat_141_air",
-            "title": "boAt Airdopes 141 ANC True Wireless in-Ear Earbuds (42H Battery)",
-            "price": "₹999",
-            "mrp": "₹4,490",
-            "discount": "78% OFF",
-            "url": "https://www.amazon.in/dp/B09N3ZNHTY",
-            "image": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg"
         }
     ]
     random.shuffle(deals_inventory)
     return deals_inventory
 
-# --- Post Function (Safe Image Fetch) ---
+# --- Safe Channel Posting Function ---
 async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
     deals = get_verified_fresh_deals()
     posted_count = 0
@@ -172,7 +165,6 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         )
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=aff_link)]])
 
-        # Download image bytes directly to prevent Telegram URL block
         try:
             img_data = None
             if deal.get("image"):
@@ -216,7 +208,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
                 parse_mode="HTML"
             )
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Verified Deals channel mein post ho chuki hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Deals EarnKaro link ke sath post ho gayi hain!")
         else:
             await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Deals already posted. Nayi deal aate hi auto post ho jayegi.")
 
@@ -224,17 +216,17 @@ async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     await post_deals_to_channel(context.bot, force=False)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 <b>Loot Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant deals post karein\n• <code>/reset</code> - Deals reset karein", parse_mode="HTML")
+    await update.message.reply_text("👋 <b>Loot Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant 2 deals post karein\n• <code>/reset</code> - Reset cache", parse_mode="HTML")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Deals fetch karke channel par post ki ja rahi hain...")
+    await update.message.reply_text("⏳ Deals generate karke channel par post ki ja rahi hain...")
     await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_db()
     await update.message.reply_text("🧹 Reset complete! Ab `/postnow` karein.")
 
-# --- Keep-Alive Web Server ---
+# --- Keep-Alive Health Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -258,9 +250,10 @@ def main():
     app.add_handler(CommandHandler("postnow", postnow_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
 
+    # Auto job har 5 minute me chalega
     app.job_queue.run_repeating(auto_job, interval=300, first=5)
 
-    print("Bot is running...")
+    print("Bot started...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
