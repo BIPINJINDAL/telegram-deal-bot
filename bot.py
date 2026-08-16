@@ -5,11 +5,10 @@ import sqlite3
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
-from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- Config ---
+# --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 AMAZON_TAG = os.getenv("AMAZON_TAG", "dealstracker-21").strip()
@@ -17,15 +16,7 @@ admin_env = os.getenv("ADMIN_ID", "0").strip()
 ADMIN_ID = int(admin_env) if admin_env.isdigit() else 0
 PORT = int(os.getenv("PORT", 8080))
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1"
-}
-
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -36,64 +27,66 @@ def init_db():
             title TEXT,
             url TEXT UNIQUE,
             target_price REAL,
-            last_price REAL,
-            image_url TEXT
+            last_price REAL
         )
     """)
     conn.commit()
     conn.close()
 
-def clean_price(text):
-    if not text:
-        return None
-    val = re.sub(r"[^\d.]", "", text.replace(",", ""))
-    try:
-        return float(val)
-    except:
-        return None
-
+# --- Amazon Anti-Bot Bypass Scraper ---
 def get_amazon_data(url):
     try:
-        # Clean URL to standard product format
+        # Extract ASIN / Clean Link
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
         if asin_match:
             clean_url = f"https://www.amazon.in/dp/{asin_match.group(1)}"
         else:
             clean_url = url.split('?')[0]
 
-        session = requests.Session()
-        res = session.get(clean_url, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(res.text, "html.parser")
+        # Use Free Web Reader Gateway to bypass datacenter IP captcha
+        gateway_url = f"https://r.jina.ai/{clean_url}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "X-Target-Selector": "body"
+        }
         
-        # Title
-        title_tag = soup.find("span", {"id": "productTitle"}) or soup.find("h1")
-        title = title_tag.get_text().strip() if title_tag else "Amazon Product"
-        
-        # Price Selectors (Multiple Fallbacks)
+        res = requests.get(gateway_url, headers=headers, timeout=25)
+        text = res.text
+
+        # Extract Title
+        title = "Amazon Product"
+        title_match = re.search(r'Title:\s*(.+)', text)
+        if title_match:
+            title = title_match.group(1).strip()
+        else:
+            first_line = [l.strip() for l in text.split('\n') if l.strip() and not l.startswith('http')]
+            if first_line:
+                title = first_line[0][:80]
+
+        # Extract Price (Regex matches ₹ 19,990 or Rs. 19990)
         price = None
-        price_tags = [
-            soup.find("span", {"class": "a-price-whole"}),
-            soup.find("span", {"id": "priceblock_ourprice"}),
-            soup.find("span", {"id": "priceblock_dealprice"}),
-            soup.find("span", {"class": "a-offscreen"}),
-            soup.find("div", {"id": "corePrice_feature_div"})
+        price_patterns = [
+            r'₹\s*([0-9,]+(?:\.[0-9]{2})?)',
+            r'INR\s*([0-9,]+(?:\.[0-9]{2})?)',
+            r'Rs\.?\s*([0-9,]+(?:\.[0-9]{2})?)'
         ]
-        
-        for tag in price_tags:
-            if tag:
-                parsed = clean_price(tag.get_text())
-                if parsed and parsed > 0:
-                    price = parsed
+
+        for pattern in price_patterns:
+            matches = re.findall(pattern, text)
+            for m in matches:
+                clean_val = float(m.replace(',', ''))
+                if 10 <= clean_val <= 500000:  # Filters valid product prices
+                    price = clean_val
                     break
-        
-        # Image
-        img_tag = soup.find("img", {"id": "landingImage"}) or soup.find("img", {"id": "imgBlkFront"})
-        img_url = img_tag.get("src") if img_tag else ""
-        
-        return {"title": title, "price": price, "image_url": img_url, "url": clean_url}
+            if price:
+                break
+
+        if price:
+            return {"title": title, "price": price, "url": clean_url}
+
     except Exception as e:
         print(f"Scrape Error: {e}")
-        return None
+    return None
 
 def make_link(url, platform):
     if platform == "amazon":
@@ -118,42 +111,44 @@ async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         target_price = float(text[3].replace(",", ""))
     except ValueError:
-        await update.message.reply_text("❌ Target price sahi number format mein daalein.")
+        await update.message.reply_text("❌ Target price number format me dalein.")
         return
 
-    await update.message.reply_text("⏳ Product check kiya ja raha hai...")
+    status_msg = await update.message.reply_text("⏳ Product verify kiya ja raha hai (Anti-bot bypass)...")
 
     data = get_amazon_data(url)
 
     if not data or not data["price"]:
-        await update.message.reply_text("❌ Price fetch nahi hui. Kripya valid product link dalein.")
+        await status_msg.edit_text("❌ Price fetch nahi hui. URL check karein ya thodi der baad try karein.")
         return
 
-    clean_url = data.get("url", url)
+    clean_url = data["url"]
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO products (platform, title, url, target_price, last_price, image_url) VALUES (?, ?, ?, ?, ?, ?)",
-                  (platform, data["title"], clean_url, target_price, data["price"], data["image_url"]))
+        c.execute("INSERT INTO products (platform, title, url, target_price, last_price) VALUES (?, ?, ?, ?, ?)",
+                  (platform, data["title"], clean_url, target_price, data["price"]))
         conn.commit()
-        await update.message.reply_text(
+        await status_msg.edit_text(
             f"✅ **Tracking Started!**\n\n"
-            f"📦 **Title:** {data['title'][:60]}...\n"
+            f"📦 **Title:** {data['title'][:65]}...\n"
             f"💰 **Current Price:** ₹{data['price']:,.0f}\n"
-            f"🎯 **Target Price:** ₹{target_price:,.0f}"
+            f"🎯 **Target Price:** ₹{target_price:,.0f}\n\n"
+            f"⚡ Jaise hi price target par aayegi, bot channel me deal post kar dega."
         )
     except sqlite3.IntegrityError:
-        await update.message.reply_text("⚠️ Ye product pehle se tracking list mein hai.")
+        await status_msg.edit_text("⚠️ Ye product already tracking list mein hai.")
     finally:
         conn.close()
 
+# --- Monitor Routine ---
 async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
-    c.execute("SELECT id, platform, title, url, target_price, last_price, image_url FROM products")
+    c.execute("SELECT id, platform, title, url, target_price, last_price FROM products")
     products = c.fetchall()
 
-    for prod_id, platform, title, url, target_price, last_price, image_url in products:
+    for prod_id, platform, title, url, target_price, last_price in products:
         data = get_amazon_data(url)
         if not data or not data["price"]:
             continue
@@ -165,27 +160,25 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
 
             caption = (
                 f"🔥 **PRICE DROP ALERT!** 🔥\n\n"
-                f"📦 **{title[:75]}**\n"
+                f"📦 **{title[:80]}**\n\n"
                 f"🔻 Purani Price: ~~₹{last_price:,.0f}~~\n"
                 f"💥 **Deal Price: ₹{curr_price:,.0f}** {f'({discount}% OFF)' if discount > 0 else ''}\n\n"
-                f"⚡ *Limited Time Deal!*"
+                f"⚡ *Limited Time Deal! Grab Now!*"
             )
 
             btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Check Deal", url=buy_link)]])
 
             try:
-                if data.get("image_url"):
-                    await context.bot.send_photo(chat_id=CHANNEL_ID, photo=data["image_url"], caption=caption, reply_markup=btn, parse_mode="Markdown")
-                else:
-                    await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=btn, parse_mode="Markdown")
+                await context.bot.send_message(chat_id=CHANNEL_ID, text=caption, reply_markup=btn, parse_mode="Markdown")
             except Exception as e:
-                print(f"Telegram Post Error: {e}")
+                print(f"Telegram Broadcast Error: {e}")
 
             c.execute("UPDATE products SET last_price = ? WHERE id = ?", (curr_price, prod_id))
             conn.commit()
 
     conn.close()
 
+# --- Health Check Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
