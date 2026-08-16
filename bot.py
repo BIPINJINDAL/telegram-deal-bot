@@ -3,8 +3,10 @@ import re
 import asyncio
 import sqlite3
 import threading
+import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -16,10 +18,11 @@ EARNKARO_ID = os.getenv("EARNKARO_ID", "").strip()
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 }
 
-# --- Database Setup ---
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -61,13 +64,16 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- EarnKaro & Affiliate Converter ---
+# --- Affiliate Link Generator ---
 def convert_to_affiliate(original_url):
-    # EarnKaro Link Conversion for all stores
+    if not original_url:
+        return "https://www.amazon.in"
+
+    # EarnKaro Link Conversion
     if EARNKARO_ID:
         encoded_url = requests.utils.quote(original_url)
         return f"https://ekaro.in/enkr?url={encoded_url}&r={EARNKARO_ID}"
-    
+
     # Fallback to Direct Amazon / Flipkart
     if "amazon.in" in original_url or "amzn.to" in original_url:
         sep = "&" if "?" in original_url else "?"
@@ -76,64 +82,76 @@ def convert_to_affiliate(original_url):
         return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}"
     return original_url
 
-# --- Live Deals Stream ---
-def get_live_deals():
+# --- 100% Dynamic Real-Time Deals Scraper ---
+def fetch_live_web_deals():
     deals = []
     
-    # Live Active Loot Deals Pool
-    curated_deals = [
-        {
-            "id": "deal_boat_141",
-            "title": "boAt Airdopes 141 ANC TWS Earbuds (42H Playtime, Low Latency)",
-            "price": "₹999",
-            "orig_price": "₹4,490",
-            "discount": "78% OFF",
-            "image_url": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg",
-            "url": "https://www.amazon.in/dp/B09N3ZNHTY"
-        },
-        {
-            "id": "deal_noise_smartwatch",
-            "title": "Noise ColorFit Pulse 2 Max 1.85'' HD Display Smartwatch",
-            "price": "₹1,199",
-            "orig_price": "₹5,999",
-            "discount": "80% OFF",
-            "image_url": "https://m.media-amazon.com/images/I/61akt30bJsL._SL1500_.jpg",
-            "url": "https://www.amazon.in/dp/B0B6BLTGTT"
-        },
-        {
-            "id": "deal_sandisk_64gb",
-            "title": "SanDisk Cruzer Blade 64GB High-Speed Flash Drive",
-            "price": "₹389",
-            "orig_price": "₹1,100",
-            "discount": "65% OFF",
-            "image_url": "https://m.media-amazon.com/images/I/61DjwgS4cbL._SL1500_.jpg",
-            "url": "https://www.amazon.in/dp/B0083PR5VC"
-        },
-        {
-            "id": "deal_boult_z40",
-            "title": "Boult Audio Z40 Ultra True Wireless in-Ear Earbuds",
-            "price": "₹1,099",
-            "orig_price": "₹4,999",
-            "discount": "78% OFF",
-            "image_url": "https://m.media-amazon.com/images/I/61Ll9y+7ZmL._SL1500_.jpg",
-            "url": "https://www.amazon.in/dp/B0B53DDZ4B"
-        },
-        {
-            "id": "deal_portronics_soundbar",
-            "title": "Portronics Pure Sound 100W Wireless Bluetooth Soundbar",
-            "price": "₹1,999",
-            "orig_price": "₹7,999",
-            "discount": "75% OFF",
-            "image_url": "https://m.media-amazon.com/images/I/61-9ZgqG1VL._SL1500_.jpg",
-            "url": "https://www.amazon.in/dp/B0863TXGM3"
-        }
-    ]
-    deals.extend(curated_deals)
+    # Source 1: India Deals Feed Stream
+    try:
+        res = requests.get("https://www.desidime.com/feed", headers=HEADERS, timeout=10)
+        if res.status_code == 200:
+            root = ET.fromstring(res.content)
+            for item in root.findall('.//item')[:10]:
+                title = item.find('title').text.strip() if item.find('title') is not None else ""
+                desc = item.find('description').text if item.find('description') is not None else ""
+                link = item.find('link').text.strip() if item.find('link') is not None else ""
+                guid = item.find('guid').text if item.find('guid') is not None else link
+
+                soup = BeautifulSoup(desc, "html.parser")
+                img_tag = soup.find("img")
+                img_url = img_tag.get("src") if img_tag else ""
+
+                store_tag = soup.find("a", href=True)
+                target_url = store_tag['href'] if store_tag else link
+
+                # Extract discount/price
+                price_match = re.search(r'(?:Rs\.?|₹)\s*([0-9,]+)', title)
+                price = f"₹{price_match.group(1)}" if price_match else "Best Offer"
+
+                if title and target_url:
+                    deals.append({
+                        "id": guid,
+                        "title": title,
+                        "price": price,
+                        "url": target_url,
+                        "image_url": img_url
+                    })
+    except Exception as e:
+        print(f"Stream 1 fetch error: {e}")
+
+    # Source 2: Public Deals Hub Scraper (Backup Live Feed)
+    if len(deals) < 3:
+        try:
+            res2 = requests.get("https://dealsheaven.com/", headers=HEADERS, timeout=10)
+            if res2.status_code == 200:
+                soup = BeautifulSoup(res2.text, "html.parser")
+                for card in soup.select(".deal-detail, .deallogo")[:8]:
+                    title_elem = card.find("h3") or card.find("a")
+                    img_elem = card.find("img")
+                    link_elem = card.find("a", href=True)
+                    price_elem = card.find("span", class_="deal-price")
+
+                    if title_elem and link_elem:
+                        t = title_elem.get_text().strip()
+                        u = link_elem["href"]
+                        img = img_elem.get("src") if img_elem else ""
+                        p = price_elem.get_text().strip() if price_elem else "Hot Deal"
+
+                        deals.append({
+                            "id": f"dh_{hash(t)}",
+                            "title": t,
+                            "price": p,
+                            "url": u if u.startswith("http") else f"https://dealsheaven.com{u}",
+                            "image_url": img
+                        })
+        except Exception as e:
+            print(f"Stream 2 fetch error: {e}")
+
     return deals
 
-# --- Auto Post Function ---
+# --- Posting Function ---
 async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
-    deals = get_live_deals()
+    deals = fetch_live_web_deals()
     posted_count = 0
     err_log = None
 
@@ -145,17 +163,16 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         clean_title = re.sub(r'[*_`\[\]]', '', deal['title'])
 
         caption = (
-            f"🔥 **SUPER LOOT DEAL ({deal['discount']})** 🔥\n\n"
+            f"🔥 **SUPER LOOT / PRICE DROP DEAL** 🔥\n\n"
             f"📦 **{clean_title}**\n\n"
-            f"🔻 Purani Price: ~~{deal['orig_price']}~~\n"
-            f"💥 **Deal Price: {deal['price']}**\n\n"
-            f"⚡ *Limited Stock! Jaldi Grab Karein.*"
+            f"💥 **Price / Offer:** `{deal['price']}`\n\n"
+            f"⚡ *Limited Stock! Jaldi Grab Karein!*"
         )
         
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=aff_link)]])
 
         try:
-            if deal.get("image_url"):
+            if deal.get("image_url") and deal["image_url"].startswith("http"):
                 await bot.send_photo(
                     chat_id=CHANNEL_ID,
                     photo=deal["image_url"],
@@ -175,7 +192,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
             posted_count += 1
             await asyncio.sleep(2)
 
-            if force and posted_count >= 3:
+            if force and posted_count >= 5:
                 break
         except Exception as e:
             err_log = str(e)
@@ -186,30 +203,37 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         if err_log:
             await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: `{err_log}`", parse_mode="Markdown")
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Deals channel par post ho gayi hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Fresh Live Deals channel mein post ho chuki hain!")
         else:
-            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Deals already posted hain. `/reset` bhej kar dobara test karein.")
+            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest deals already posted hain. Nayi deal aate hi auto post ho jayegi.")
 
+# --- Background Scheduled Task ---
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     await post_deals_to_channel(context.bot, force=False)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Bot Live Hai! Channel: " + CHANNEL_ID)
+    await update.message.reply_text(
+        "👋 **Auto Deals Engine Live Hai!**\n\n"
+        "Commands:\n"
+        "• `/postnow` - Live fresh deals turant channel par bhejein\n"
+        "• `/reset` - Deal cache clear karein",
+        parse_mode="Markdown"
+    )
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Deals fetch karke channel par bhej rahe hain...")
+    await update.message.reply_text("⏳ Live internet se fresh deals fetch karke channel par post ki ja rahi hain...")
     await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_db()
-    await update.message.reply_text("🧹 Reset complete! Ab `/postnow` karein.")
+    await update.message.reply_text("🧹 Cache reset done! Ab `/postnow` karein.")
 
 # --- Keep-Alive Health Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Live 24/7!")
+        self.wfile.write(b"Bot is live 24/7!")
     def log_message(self, format, *args):
         return
 
@@ -227,9 +251,10 @@ def main():
     app.add_handler(CommandHandler("postnow", postnow_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
 
-    # Auto post every 5 minutes (300 sec)
+    # Background runner every 5 minutes
     app.job_queue.run_repeating(auto_job, interval=300, first=5)
 
+    print("Dynamic Deals Engine Running...")
     app.run_polling()
 
 if __name__ == "__main__":
