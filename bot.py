@@ -4,21 +4,20 @@ import asyncio
 import sqlite3
 import requests
 from bs4 import BeautifulSoup
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- Config (Environment Variables se read karega) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@your_deals_channel")
-AMAZON_TAG = os.getenv("AMAZON_TAG", "yourtag-21")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+AMAZON_TAG = os.getenv("AMAZON_TAG", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# --- Database ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -65,7 +64,6 @@ def make_link(url, platform):
         return f"https://ekaro.in/enkr?url={url}"
     return url
 
-# --- Bot Commands ---
 async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ADMIN_ID != 0 and update.effective_user.id != ADMIN_ID:
         return
@@ -90,11 +88,10 @@ async def track_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await update.message.reply_text(f"✅ **Tracked:** {data['title'][:50]}...\nCurrent: ₹{data['price']} | Target: ₹{target_price}")
     except sqlite3.IntegrityError:
-        await update.message.reply_text("⚠️ Product already list mein hai.")
+        await update.message.reply_text("⚠️ Product already tracked.")
     finally:
         conn.close()
 
-# --- Monitor Routine ---
 async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -116,7 +113,7 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
                 f"📦 **{title[:75]}**\n"
                 f"🔻 Purani Price: ~~₹{last_price:,.0f}~~\n"
                 f"💥 **Deal Price: ₹{curr_price:,.0f}** {f'({discount}% OFF)' if discount > 0 else ''}\n\n"
-                f"⚡ *Limited Stock! Deal grab karein.*"
+                f"⚡ *Limited Time Deal!*"
             )
 
             btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Check Deal", url=buy_link)]])
@@ -134,12 +131,27 @@ async def monitor_deals(context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
+async def handle_ping(request):
+    return web.Response(text="Bot is Active and Running 24/7!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("track", track_cmd))
     app.job_queue.run_repeating(monitor_deals, interval=900, first=10)
-    print("Bot started...")
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_web_server())
+
+    print("Bot is live on Free Web Service...")
     app.run_polling()
 
 if __name__ == "__main__":
