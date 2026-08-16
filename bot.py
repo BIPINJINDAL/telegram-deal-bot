@@ -14,7 +14,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 raw_channel = os.getenv("CHANNEL_ID", "-1003958458010").strip()
 
-# Handle numeric vs string channel IDs
 try:
     CHANNEL_ID = int(raw_channel)
 except ValueError:
@@ -25,7 +24,7 @@ EARNKARO_ID = os.getenv("EARNKARO_ID", "").strip()
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 }
 
 # --- Database ---
@@ -80,60 +79,59 @@ def convert_to_affiliate(original_url):
         return f"https://ekaro.in/enkr?url={requests.utils.quote(original_url)}"
     return original_url
 
-# --- Live Deals Fetcher ---
+# --- Multi-Source Live Scraper ---
 def fetch_live_deals():
     deals = []
-    try:
-        res = requests.get("https://www.desidime.com/feed", headers=HEADERS, timeout=8)
-        if res.status_code == 200:
-            root = ET.fromstring(res.content)
-            for item in root.findall('.//item')[:10]:
-                title = item.find('title').text.strip() if item.find('title') is not None else ""
-                desc = item.find('description').text if item.find('description') is not None else ""
-                link = item.find('link').text.strip() if item.find('link') is not None else ""
-                
-                soup = BeautifulSoup(desc, "html.parser")
-                img_tag = soup.find("img")
-                img_url = img_tag.get("src") if img_tag else ""
-                
-                store_tag = soup.find("a", href=True)
-                target_url = store_tag['href'] if store_tag else link
+    
+    # 3 High-Speed Active India Loot Feeds
+    feed_sources = [
+        "https://indiafreestuff.in/feed",
+        "https://www.offernloot.com/feed",
+        "https://dealhunt.in/feed"
+    ]
 
-                if title and target_url:
-                    deals.append({
-                        "id": link,
-                        "title": title,
-                        "url": target_url,
-                        "image": img_url
-                    })
-    except Exception as e:
-        print(f"Scraper error: {e}")
+    for feed_url in feed_sources:
+        try:
+            res = requests.get(feed_url, headers=HEADERS, timeout=8)
+            if res.status_code == 200:
+                root = ET.fromstring(res.content)
+                for item in root.findall('.//item')[:8]:
+                    title = item.find('title').text.strip() if item.find('title') is not None else ""
+                    link = item.find('link').text.strip() if item.find('link') is not None else ""
+                    desc = item.find('description').text if item.find('description') is not None else ""
+                    
+                    # Extract image from description or enclosure
+                    soup = BeautifulSoup(desc, "html.parser")
+                    img_tag = soup.find("img")
+                    img_url = img_tag.get("src") if img_tag else ""
 
-    # Guaranteed Fallback Deals if Web Stream is Empty
-    if len(deals) == 0:
-        deals = [
-            {
-                "id": "boat_141_deal",
-                "title": "boAt Airdopes 141 Bluetooth TWS (42H Playtime, Low Latency)",
-                "url": "https://www.amazon.in/dp/B09N3ZNHTY",
-                "image": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg"
-            },
-            {
-                "id": "noise_pulse_deal",
-                "title": "Noise ColorFit Pulse 2 Max 1.85'' Smart Watch (Bluetooth Calling)",
-                "url": "https://www.amazon.in/dp/B0B6BLTGTT",
-                "image": "https://m.media-amazon.com/images/I/61akt30bJsL._SL1500_.jpg"
-            },
-            {
-                "id": "sandisk_64gb_deal",
-                "title": "SanDisk Cruzer Blade 64GB USB 2.0 Flash Drive",
-                "url": "https://www.amazon.in/dp/B0083PR5VC",
-                "image": "https://m.media-amazon.com/images/I/61DjwgS4cbL._SL1500_.jpg"
-            }
-        ]
+                    enclosure = item.find('enclosure')
+                    if not img_url and enclosure is not None:
+                        img_url = enclosure.get('url', '')
+
+                    # Extract Direct Merchant Link inside post if present
+                    store_link = None
+                    for a in soup.find_all("a", href=True):
+                        href = a['href']
+                        if any(dom in href for dom in ["amazon.in", "amzn.to", "flipkart.com", "meesho.com", "myntra.com", "ajio.com"]):
+                            store_link = href
+                            break
+
+                    target_url = store_link if store_link else link
+
+                    if title and target_url:
+                        deals.append({
+                            "id": link,
+                            "title": title,
+                            "url": target_url,
+                            "image": img_url
+                        })
+        except Exception as e:
+            print(f"Feed error ({feed_url}): {e}")
+
     return deals
 
-# --- Posting Function ---
+# --- Posting Engine ---
 async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
     deals = fetch_live_deals()
     posted_count = 0
@@ -148,7 +146,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         caption = (
             f"🔥 **SUPER LOOT DEAL** 🔥\n\n"
             f"📦 **{clean_title}**\n\n"
-            f"⚡ *Limited Stock Deal! Jaldi Grab Karein!*"
+            f"⚡ *Limited Period Price Drop!*"
         )
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy Now / Loot Deal", url=aff_link)]])
 
@@ -172,7 +170,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
             posted_count += 1
             await asyncio.sleep(2)
 
-            if force and posted_count >= 3:
+            if force and posted_count >= 5:
                 break
         except Exception as e:
             err_message = str(e)
@@ -183,27 +181,27 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         if err_message:
             await bot.send_message(
                 chat_id=chat_to_notify,
-                text=f"❌ **Channel Post Error:**\n`{err_message}`\n\n👉 Make sure bot is **Admin** in channel `{CHANNEL_ID}` with 'Post Messages' ON.",
+                text=f"❌ **Channel Post Error:**\n`{err_message}`",
                 parse_mode="Markdown"
             )
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Deals channel mein successfully post ho gayi hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Bilkul nayi live deals post ho chuki hain!")
         else:
-            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest deals posted hain. Nayi deal aate hi auto post hogi.")
+            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari trending deals already up-to-date hain. Nayi deal aate hi auto-post ho jayegi.")
 
 async def auto_job(context: ContextTypes.DEFAULT_TYPE):
     await post_deals_to_channel(context.bot, force=False)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 **Loot Deals Engine Active!**\nUse `/postnow` to trigger instantly.")
+    await update.message.reply_text("👋 **Loot Deals Engine Active!**\n\n• `/postnow` - Instant 5 fresh deals post karein\n• `/reset` - Deal cache clear karein")
 
 async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Deals fetch karke channel par bhej rahe hain...")
+    await update.message.reply_text("⏳ Internet se bilkul fresh live deals fetch ho rahi hain...")
     await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
 
 async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_db()
-    await update.message.reply_text("🧹 Cache cleared! Send `/postnow`.")
+    await update.message.reply_text("🧹 Cache reset complete! Ab `/postnow` karein.")
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -227,6 +225,7 @@ def main():
     app.add_handler(CommandHandler("postnow", postnow_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
 
+    # Background runner every 5 mins
     app.job_queue.run_repeating(auto_job, interval=300, first=5)
 
     print("Bot is polling...")
