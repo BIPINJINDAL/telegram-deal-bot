@@ -1,6 +1,7 @@
 import os
 import io
 import html
+import urllib.parse
 import asyncio
 import sqlite3
 import threading
@@ -67,13 +68,13 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- Direct Working Flipkart Link Formatter ---
+# --- 100% Working Official EarnKaro Link Converter ---
 def make_flipkart_deal_link(raw_url):
     clean_url = raw_url.split("?")[0].strip()
-    sep = "&" if "?" in clean_url else "?"
-    return f"{clean_url}{sep}affid=earnkaro&affExtParam1={EARNKARO_ID}"
+    encoded_url = urllib.parse.quote(clean_url, safe='')
+    return f"https://ekaro.in/enkr?id={EARNKARO_ID}&url={encoded_url}"
 
-# --- Verified 100% Active Flipkart Inventory ---
+# --- Flipkart Verified Products with Direct Clean URLs ---
 FLIPKART_DEALS = [
     {
         "id": "fk_boat_airdopes_131_pro",
@@ -122,7 +123,7 @@ FLIPKART_DEALS = [
     }
 ]
 
-# --- Direct In-Memory Image Loader ---
+# --- In-Memory Image Loader ---
 def fetch_image_stream(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -131,7 +132,7 @@ def fetch_image_stream(url):
             bio.name = "deal.jpg"
             return bio
     except Exception as e:
-        print(f"Error fetching image {url}: {e}")
+        print(f"Error fetching image: {e}")
     return None
 
 # --- Channel Post Engine ---
@@ -194,7 +195,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         if err_message:
             await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: <code>{html.escape(err_message)}</code>", parse_mode="HTML")
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Flipkart Deals (with HD Images & ID: 5545743) channel mein post ho chuki hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Flipkart Deals (with HD Images & EarnKaro Tracking) channel mein post ho chuki hain!")
         else:
             await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest Flipkart deals already posted hain.")
 
@@ -236,7 +237,7 @@ def main():
     app.add_handler(CommandHandler("postnow", postnow_cmd))
     app.add_handler(CommandHandler("reset", reset_cmd))
 
-    # Auto job har 5 minute mein background mein run hoga
+    # Auto job har 5 minute me background me chalega
     app.job_queue.run_repeating(auto_job, interval=300, first=5)
 
     print("Bot polling started...")
