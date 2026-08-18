@@ -100,7 +100,6 @@ def fetch_live_marketplace_deals():
                 img_tag = soup.find("img")
                 img_url = img_tag.get("src") if img_tag else ""
 
-                # Extract direct merchant link if present
                 store_link = None
                 for a in soup.find_all("a", href=True):
                     href = a['href']
@@ -183,7 +182,7 @@ def send_telegram_deal(deal):
         except Exception as e:
             print(f"Image upload fallback: {e}")
 
-    # Fallback to text message if image load fails
+    # Fallback to text message
     try:
         payload = {
             "chat_id": CHANNEL_ID,
@@ -201,7 +200,7 @@ def send_telegram_deal(deal):
 def continuous_deals_poster():
     while True:
         try:
-            deals = fetch_live_deals := fetch_live_marketplace_deals()
+            deals = fetch_live_marketplace_deals()
             for deal in deals:
                 if not is_already_posted(deal["id"]):
                     success = send_telegram_deal(deal)
@@ -213,7 +212,7 @@ def continuous_deals_poster():
         except Exception as e:
             print(f"Loop error: {e}")
 
-        # Check for new live deals every 5 minutes
+        # Check every 5 minutes
         time.sleep(300)
 
 # --- Keep-Alive Health Server ---
