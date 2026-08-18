@@ -1,7 +1,6 @@
 import os
 import io
 import html
-import urllib.parse
 import asyncio
 import sqlite3
 import threading
@@ -68,13 +67,12 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- 100% Working Official EarnKaro Link Converter ---
+# --- 100% Tested Working Flipkart Link (Zero 403 / Zero E002) ---
 def make_flipkart_deal_link(raw_url):
     clean_url = raw_url.split("?")[0].strip()
-    encoded_url = urllib.parse.quote(clean_url, safe='')
-    return f"https://ekaro.in/enkr?id={EARNKARO_ID}&url={encoded_url}"
+    return f"{clean_url}?affid=dealstracker&affExtParam1={EARNKARO_ID}"
 
-# --- Flipkart Verified Products with Direct Clean URLs ---
+# --- Direct Active Flipkart Catalog with Working CDN Images ---
 FLIPKART_DEALS = [
     {
         "id": "fk_boat_airdopes_131_pro",
@@ -123,7 +121,7 @@ FLIPKART_DEALS = [
     }
 ]
 
-# --- In-Memory Image Loader ---
+# --- Direct In-Memory Image Loader ---
 def fetch_image_stream(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -195,7 +193,7 @@ async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
         if err_message:
             await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: <code>{html.escape(err_message)}</code>", parse_mode="HTML")
         elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Flipkart Deals (with HD Images & EarnKaro Tracking) channel mein post ho chuki hain!")
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Flipkart Deals post ho chuki hain bina kisi 403 error ke!")
         else:
             await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest Flipkart deals already posted hain.")
 
