@@ -1,16 +1,16 @@
 import os
 import io
-import re
-import json
-import time
 import html
+import asyncio
 import sqlite3
 import threading
 import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. Bot & Channel Configuration ---
+# --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 raw_channel = os.getenv("CHANNEL_ID", "-1003958458010").strip()
 
@@ -19,19 +19,15 @@ try:
 except ValueError:
     CHANNEL_ID = raw_channel
 
-# Aapka Verified EarnKaro User ID
 EARNKARO_ID = "5545743"
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
 }
 
-def log(msg):
-    print(f"[{time.strftime('%X')}] {msg}", flush=True)
-
-# --- 2. Database for Duplicate Prevention ---
+# --- Database ---
 def init_db():
     conn = sqlite3.connect("flipkart_deals.db")
     c = conn.cursor()
@@ -60,7 +56,7 @@ def mark_as_posted(deal_id):
         c.execute("INSERT OR REPLACE INTO posted_deals (deal_id) VALUES (?)", (str(deal_id),))
         conn.commit()
     except Exception as e:
-        log(f"DB Error: {e}")
+        print(f"DB Error: {e}")
     finally:
         conn.close()
 
@@ -71,15 +67,14 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- 3. Flipkart Affiliate Link Generator (With User ID: 5545743) ---
-def make_flipkart_affiliate_link(raw_url):
+# --- Direct Working Flipkart Link Formatter ---
+def make_flipkart_deal_link(raw_url):
     clean_url = raw_url.split("?")[0].strip()
     sep = "&" if "?" in clean_url else "?"
-    # Attaches EarnKaro tracking parameter
     return f"{clean_url}{sep}affid=earnkaro&affExtParam1={EARNKARO_ID}"
 
-# --- 4. Verified Active Flipkart Loot Deals Pool ---
-FLIPKART_CATALOG = [
+# --- Verified 100% Active Flipkart Inventory ---
+FLIPKART_DEALS = [
     {
         "id": "fk_boat_airdopes_131_pro",
         "title": "boAt Airdopes 131 PRO True Wireless Earbuds (45H Playtime, Quad Mics, Beast Mode)",
@@ -87,7 +82,7 @@ FLIPKART_CATALOG = [
         "mrp": "₹2,990",
         "discount": "69% OFF",
         "url": "https://www.flipkart.com/boat-airdopes-131-pro-tws-earbuds/p/itmca2bb89e02315",
-        "photo": "https://rukminim2.flixcart.com/image/832/832/xif0q/headphone/p/r/z/airdopes-131-pro-boat-original-imagr767zgzhg9hy.jpeg"
+        "photo_url": "https://rukminim2.flixcart.com/image/832/832/xif0q/headphone/p/r/z/airdopes-131-pro-boat-original-imagr767zgzhg9hy.jpeg"
     },
     {
         "id": "fk_boult_audio_z40",
@@ -96,7 +91,7 @@ FLIPKART_CATALOG = [
         "mrp": "₹4,999",
         "discount": "80% OFF",
         "url": "https://www.flipkart.com/boult-audio-z40-true-wireless-earbuds/p/itm535df2a1ad96b",
-        "photo": "https://rukminim2.flixcart.com/image/832/832/xif0q/headphone/m/u/v/-original-imagp8f4k7fggyhy.jpeg"
+        "photo_url": "https://rukminim2.flixcart.com/image/832/832/xif0q/headphone/m/u/v/-original-imagp8f4k7fggyhy.jpeg"
     },
     {
         "id": "fk_noise_colorfit_icon",
@@ -105,7 +100,7 @@ FLIPKART_CATALOG = [
         "mrp": "₹5,999",
         "discount": "81% OFF",
         "url": "https://www.flipkart.com/noise-colorfit-icon-2-1-8-display-bluetooth-calling-smartwatch/p/itm677c7ecda6173",
-        "photo": "https://rukminim2.flixcart.com/image/832/832/xif0q/smartwatch/y/j/0/-original-imagkhe74jhz8hga.jpeg"
+        "photo_url": "https://rukminim2.flixcart.com/image/832/832/xif0q/smartwatch/y/j/0/-original-imagkhe74jhz8hga.jpeg"
     },
     {
         "id": "fk_sandisk_cruzer_blade_64gb",
@@ -114,7 +109,7 @@ FLIPKART_CATALOG = [
         "mrp": "₹1,100",
         "discount": "64% OFF",
         "url": "https://www.flipkart.com/sandisk-cruzer-blade-64-gb-utility-pendrive/p/itme9b22bce376ee",
-        "photo": "https://rukminim2.flixcart.com/image/832/832/ktyp8cw0/pendrive/pendrive/z/x/q/sdcz50-064g-i35-sandisk-original-imag76pph9h98zfh.jpeg"
+        "photo_url": "https://rukminim2.flixcart.com/image/832/832/ktyp8cw0/pendrive/pendrive/z/x/q/sdcz50-064g-i35-sandisk-original-imag76pph9h98zfh.jpeg"
     },
     {
         "id": "fk_portronics_toad_mouse",
@@ -123,113 +118,129 @@ FLIPKART_CATALOG = [
         "mrp": "₹599",
         "discount": "53% OFF",
         "url": "https://www.flipkart.com/portronics-toad-23-wireless-optical-mouse/p/itmd9ba45e12be8f",
-        "photo": "https://rukminim2.flixcart.com/image/832/832/xif0q/mouse/6/u/i/toad-23-portronics-original-imaghg3b6t57zkhz.jpeg"
+        "photo_url": "https://rukminim2.flixcart.com/image/832/832/xif0q/mouse/6/u/i/toad-23-portronics-original-imaghg3b6t57zkhz.jpeg"
     }
 ]
 
-# --- 5. Direct Telegram Broadcaster ---
-def send_flipkart_deal(deal):
-    clean_title = re.sub(r'[*_`\[\]]', '', deal['title'])
-    safe_title = html.escape(clean_title)
-    safe_price = html.escape(deal['price'])
-    safe_mrp = html.escape(deal['mrp'])
-    safe_discount = html.escape(deal['discount'])
-
-    aff_link = make_flipkart_affiliate_link(deal["url"])
-
-    caption = (
-        f"🛍️ <b>FLIPKART SUPER LOOT DEAL ({safe_discount})</b> 🛍️\n\n"
-        f"📦 <b>{safe_title}</b>\n\n"
-        f"🔻 MRP: <s>{safe_mrp}</s>\n"
-        f"💥 <b>Offer Price: {safe_price}</b>\n\n"
-        f"⚡ <i>Limited Stock Offer! Jaldi order karein!</i>"
-    )
-
-    reply_markup = {
-        "inline_keyboard": [[{"text": "🛒 Buy on Flipkart / Grab Deal", "url": aff_link}]]
-    }
-
-    # Stream photo bytes into memory
+# --- Direct In-Memory Image Loader ---
+def fetch_image_stream(url):
     try:
-        res = requests.get(deal["photo"], headers=HEADERS, timeout=8)
+        res = requests.get(url, headers=HEADERS, timeout=10)
         if res.status_code == 200 and len(res.content) > 1000:
-            files = {"photo": ("flipkart_deal.jpg", io.BytesIO(res.content), "image/jpeg")}
-            data = {
-                "chat_id": CHANNEL_ID,
-                "caption": caption,
-                "parse_mode": "HTML",
-                "reply_markup": json.dumps(reply_markup)
-            }
-            resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=12)
-            if resp.status_code == 200:
-                log(f"✅ Flipkart Deal Posted with HD Photo: {clean_title[:35]}")
-                return True
-            else:
-                log(f"Telegram Photo Error: {resp.text}")
+            bio = io.BytesIO(res.content)
+            bio.name = "deal.jpg"
+            return bio
     except Exception as e:
-        log(f"Photo download error: {e}")
+        print(f"Error fetching image {url}: {e}")
+    return None
 
-    # Fallback to text message if photo times out
-    try:
-        payload = {
-            "chat_id": CHANNEL_ID,
-            "text": caption,
-            "parse_mode": "HTML",
-            "reply_markup": reply_markup
-        }
-        resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
-        return resp.status_code == 200
-    except Exception as e:
-        log(f"Text send error: {e}")
-        return False
+# --- Channel Post Engine ---
+async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
+    deals = FLIPKART_DEALS.copy()
+    random.shuffle(deals)
+    posted_count = 0
+    err_message = None
 
-# --- 6. 24/7 Automated Posting Worker ---
-def continuous_flipkart_poster():
-    log("Flipkart automated deals poster engine started...")
-    time.sleep(3)
+    for deal in deals:
+        if not force and is_already_posted(deal["id"]):
+            continue
 
-    while True:
+        deal_url = make_flipkart_deal_link(deal["url"])
+        safe_title = html.escape(deal['title'])
+        price_text = html.escape(deal['price'])
+        mrp_text = html.escape(deal['mrp'])
+        discount_text = html.escape(deal['discount'])
+
+        caption = (
+            f"🛍️ <b>FLIPKART SUPER LOOT DEAL ({discount_text})</b> 🛍️\n\n"
+            f"📦 <b>{safe_title}</b>\n\n"
+            f"🔻 MRP: <s>{mrp_text}</s>\n"
+            f"💥 <b>Offer Price: {price_text}</b>\n\n"
+            f"⚡ <i>Limited Stock Deal! Jaldi grab karein!</i>"
+        )
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy on Flipkart / Grab Deal", url=deal_url)]])
+
+        img_file = fetch_image_stream(deal["photo_url"])
+
         try:
-            pool = FLIPKART_CATALOG.copy()
-            random.shuffle(pool)
+            if img_file:
+                await bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=img_file,
+                    caption=caption,
+                    reply_markup=btn,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=caption,
+                    reply_markup=btn,
+                    parse_mode="HTML"
+                )
 
-            # Auto-reset database if all deals are posted to keep loop going
-            if all(is_already_posted(d["id"]) for d in pool):
-                log("All Flipkart deals cycle completed. Resetting database for continuous rotation...")
-                clear_db()
+            mark_as_posted(deal["id"])
+            posted_count += 1
+            await asyncio.sleep(2)
 
-            for deal in pool:
-                if not is_already_posted(deal["id"]):
-                    if send_flipkart_deal(deal):
-                        mark_as_posted(deal["id"])
-                        time.sleep(4)
-                        break
-
+            if force and posted_count >= 2:
+                break
         except Exception as e:
-            log(f"Flipkart worker loop error: {e}")
+            err_message = str(e)
+            print(f"Telegram Post Error: {e}")
+            break
 
-        # Post next deal every 3 minutes
-        time.sleep(180)
+    if chat_to_notify:
+        if err_message:
+            await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: <code>{html.escape(err_message)}</code>", parse_mode="HTML")
+        elif posted_count > 0:
+            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Flipkart Deals (with HD Images & ID: 5545743) channel mein post ho chuki hain!")
+        else:
+            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari latest Flipkart deals already posted hain.")
 
-# --- 7. Keep-Alive Health Server ---
+async def auto_job(context: ContextTypes.DEFAULT_TYPE):
+    await post_deals_to_channel(context.bot, force=False)
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 <b>Flipkart Deals Bot Active!</b>\n\n• <code>/postnow</code> - Instant Flipkart deals post karein\n• <code>/reset</code> - Database reset karein", parse_mode="HTML")
+
+async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Flipkart deals fetch karke channel par post ki ja rahi hain...")
+    await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
+
+async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_db()
+    await update.message.reply_text("🧹 Reset complete! Ab `/postnow` karein.")
+
+# --- Keep-Alive Health Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Flipkart Loot Bot Engine Live 24/7!")
+        self.wfile.write(b"Flipkart Bot Engine Live 24/7!")
     def log_message(self, format, *args):
         return
 
+def run_health_server():
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    server.serve_forever()
+
 def main():
     init_db()
-    log("Flipkart Database initialized.")
 
-    poster_thread = threading.Thread(target=continuous_flipkart_poster, daemon=True)
-    poster_thread.start()
+    web_thread = threading.Thread(target=run_health_server, daemon=True)
+    web_thread.start()
 
-    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    log(f"Health check running on port {PORT}")
-    server.serve_forever()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("postnow", postnow_cmd))
+    app.add_handler(CommandHandler("reset", reset_cmd))
+
+    # Auto job har 5 minute mein background mein run hoga
+    app.job_queue.run_repeating(auto_job, interval=300, first=5)
+
+    print("Bot polling started...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
