@@ -1,6 +1,7 @@
 import os
 import io
 import re
+import json
 import time
 import html
 import sqlite3
@@ -120,7 +121,7 @@ def fetch_live_marketplace_deals():
     except Exception as e:
         log(f"IFS Feed Error: {e}")
 
-    # Fallback Dynamic Real-Time Bestseller Pool (Zero Downtime Guarantee)
+    # Fallback Dynamic Real-Time Bestseller Pool
     if len(deals) < 3:
         deals.extend([
             {
@@ -178,7 +179,7 @@ def send_telegram_deal(deal):
                     "chat_id": CHANNEL_ID,
                     "caption": caption,
                     "parse_mode": "HTML",
-                    "reply_markup": requests.utils.json.dumps(reply_markup)
+                    "reply_markup": json.dumps(reply_markup)
                 }
                 resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=10)
                 if resp.status_code == 200:
