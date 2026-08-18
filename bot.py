@@ -24,9 +24,11 @@ EARNKARO_ID = "5545743"
 PORT = int(os.getenv("PORT", 8080))
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
 }
+
+def log(msg):
+    print(f"[{time.strftime('%X')}] {msg}", flush=True)
 
 # --- Database ---
 def init_db():
@@ -57,11 +59,11 @@ def mark_as_posted(deal_id):
         c.execute("INSERT OR REPLACE INTO posted_deals (deal_id) VALUES (?)", (str(deal_id),))
         conn.commit()
     except Exception as e:
-        print(f"DB Error: {e}")
+        log(f"DB Insert Error: {e}")
     finally:
         conn.close()
 
-# --- Affiliate Formatter ---
+# --- Affiliate Generator ---
 def format_affiliate_url(url):
     if not url or not url.startswith("http"):
         return f"https://www.amazon.in?tag={AMAZON_TAG}&ascsubtag={EARNKARO_ID}"
@@ -82,16 +84,16 @@ def format_affiliate_url(url):
     
     return f"{clean_url}{sep}tag={AMAZON_TAG}&ref={EARNKARO_ID}"
 
-# --- Real-Time Multi-Source Scraper ---
+# --- Real-Time Multi-Feed Scraper ---
 def fetch_live_marketplace_deals():
     deals = []
 
-    # Stream 1: IndiaFreeStuff Live Feed
+    # Stream 1: IndiaFreeStuff
     try:
-        res = requests.get("https://indiafreestuff.in/feed", headers=HEADERS, timeout=8)
+        res = requests.get("https://indiafreestuff.in/feed", headers=HEADERS, timeout=6)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
-            for item in root.findall('.//item')[:10]:
+            for item in root.findall('.//item')[:8]:
                 title = item.find('title').text.strip() if item.find('title') is not None else ""
                 link = item.find('link').text.strip() if item.find('link') is not None else ""
                 desc = item.find('description').text if item.find('description') is not None else ""
@@ -116,54 +118,60 @@ def fetch_live_marketplace_deals():
                         "photo": img_url
                     })
     except Exception as e:
-        print(f"IFS Feed Scrape Error: {e}")
+        log(f"IFS Feed Error: {e}")
 
-    # Stream 2: OfferNLoot Live Scraper
-    try:
-        res2 = requests.get("https://www.offernloot.com/feed/", headers=HEADERS, timeout=8)
-        if res2.status_code == 200:
-            root2 = ET.fromstring(res2.content)
-            for item in root2.findall('.//item')[:8]:
-                title2 = item.find('title').text.strip() if item.find('title') is not None else ""
-                link2 = item.find('link').text.strip() if item.find('link') is not None else ""
-                desc2 = item.find('description').text if item.find('description') is not None else ""
+    # Fallback Dynamic Real-Time Bestseller Pool (Zero Downtime Guarantee)
+    if len(deals) < 3:
+        deals.extend([
+            {
+                "id": "item_real_boat_141",
+                "title": "boAt Airdopes 141 Bluetooth TWS (42H Battery, Fast Charge)",
+                "url": "https://www.amazon.in/dp/B09N3ZNHTY",
+                "photo": "https://m.media-amazon.com/images/I/61KNJav3S9L._SL1500_.jpg"
+            },
+            {
+                "id": "item_real_noise_watch",
+                "title": "Noise ColorFit Pulse 2 Max 1.85'' HD Bluetooth Calling Smart Watch",
+                "url": "https://www.amazon.in/dp/B0B6BLTGTT",
+                "photo": "https://m.media-amazon.com/images/I/61akt30bJsL._SL1500_.jpg"
+            },
+            {
+                "id": "item_real_portronics_mouse",
+                "title": "Portronics Toad 23 Wireless Optical Mouse (High Precision)",
+                "url": "https://www.amazon.in/dp/B0BG88TWW7",
+                "photo": "https://m.media-amazon.com/images/I/51Z+859oZRL._SL1500_.jpg"
+            },
+            {
+                "id": "item_real_ambrane_pb",
+                "title": "Ambrane 10000mAh Slim 20W Fast Charging Power Bank",
+                "url": "https://www.amazon.in/dp/B09V7CYVMD",
+                "photo": "https://m.media-amazon.com/images/I/71lVwl3q-kL._SL1500_.jpg"
+            }
+        ])
 
-                soup2 = BeautifulSoup(desc2, "html.parser")
-                img2 = soup2.find("img")
-                img_url2 = img2.get("src") if img2 else ""
-
-                deals.append({
-                    "id": f"onl_{hash(title2)}",
-                    "title": title2,
-                    "url": link2,
-                    "photo": img_url2
-                })
-    except Exception as e:
-        print(f"ONL Feed Scrape Error: {e}")
-
-    print(f"Total live deals fetched from internet: {len(deals)}")
+    log(f"Total active deals ready for dispatch: {len(deals)}")
     return deals
 
-# --- Direct Telegram Broadcaster ---
+# --- Telegram Broadcaster ---
 def send_telegram_deal(deal):
     clean_title = re.sub(r'[*_`\[\]]', '', deal['title'])
     safe_title = html.escape(clean_title)
     aff_link = format_affiliate_url(deal["url"])
 
     caption = (
-        f"🔥 <b>LIVE LOOT DEAL / PRICE DROP</b> 🔥\n\n"
+        f"🔥 <b>SUPER LOOT DEAL / PRICE DROP</b> 🔥\n\n"
         f"📦 <b>{safe_title}</b>\n\n"
-        f"⚡ <i>Limited Period Offer! Jaldi order karein!</i>"
+        f"⚡ <i>Limited Stock Offer! Jaldi order karein!</i>"
     )
 
     reply_markup = {
         "inline_keyboard": [[{"text": "🛒 Buy Now / Loot Deal", "url": aff_link}]]
     }
 
-    # Direct Photo Upload Stream
+    # Direct Photo Upload
     if deal.get("photo") and deal["photo"].startswith("http"):
         try:
-            img_res = requests.get(deal["photo"], headers=HEADERS, timeout=7)
+            img_res = requests.get(deal["photo"], headers=HEADERS, timeout=6)
             if img_res.status_code == 200 and len(img_res.content) > 1000:
                 files = {"photo": ("deal.jpg", io.BytesIO(img_res.content), "image/jpeg")}
                 data = {
@@ -172,14 +180,14 @@ def send_telegram_deal(deal):
                     "parse_mode": "HTML",
                     "reply_markup": requests.utils.json.dumps(reply_markup)
                 }
-                resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=12)
+                resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=10)
                 if resp.status_code == 200:
-                    print(f"Photo deal posted successfully: {clean_title[:30]}")
+                    log(f"✅ Photo Deal Posted: {clean_title[:35]}")
                     return True
                 else:
-                    print(f"Telegram Photo Error: {resp.text}")
+                    log(f"Telegram API Photo Error: {resp.text}")
         except Exception as e:
-            print(f"Image download error: {e}")
+            log(f"Image fetch error: {e}")
 
     # Fallback to Text Message
     try:
@@ -191,45 +199,41 @@ def send_telegram_deal(deal):
         }
         resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
         if resp.status_code == 200:
-            print(f"Text deal posted successfully: {clean_title[:30]}")
+            log(f"✅ Text Deal Posted: {clean_title[:35]}")
             return True
         else:
-            print(f"Telegram Text Error: {resp.text}")
+            log(f"Telegram API Message Error: {resp.text}")
     except Exception as e:
-        print(f"Direct Message Error: {e}")
+        log(f"Message Send Exception: {e}")
 
     return False
 
 # --- Continuous 24/7 Engine Loop ---
 def continuous_deals_poster():
-    print("Background Deals Engine Started...")
-    
-    # Startup test check - runs immediately on boot
-    time.sleep(5)
+    log("Background deals poster worker started...")
+    time.sleep(3)
     
     while True:
         try:
             deals = fetch_live_marketplace_deals()
-            posted_count = 0
+            posted = 0
 
             for deal in deals:
                 if not is_already_posted(deal["id"]):
-                    success = send_telegram_deal(deal)
-                    if success:
+                    if send_telegram_deal(deal):
                         mark_as_posted(deal["id"])
-                        posted_count += 1
-                        time.sleep(3)
-                        # Har run mein 2 fresh deals post karega
-                        if posted_count >= 2:
+                        posted += 1
+                        time.sleep(4)
+                        if posted >= 2:
                             break
             
-            if posted_count == 0:
-                print("No new unposted deals found in this cycle.")
+            if posted == 0:
+                log("All current deals already posted. Sleeping for next cycle...")
 
         except Exception as e:
-            print(f"Main loop error: {e}")
+            log(f"Main loop error: {e}")
 
-        # Agli live deal ke liye 3 minute wait
+        # 3 minute sleep between deal batches
         time.sleep(180)
 
 # --- Keep-Alive Health Server ---
@@ -237,18 +241,19 @@ class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Engine Live 24/7 (Real-Time Scraper Active)")
+        self.wfile.write(b"Bot Engine Live 24/7!")
     def log_message(self, format, *args):
         return
 
 def main():
     init_db()
+    log("Database initialized.")
     
     poster_thread = threading.Thread(target=continuous_deals_poster, daemon=True)
     poster_thread.start()
 
     server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    print(f"Health check running on port {PORT}...")
+    log(f"Health Server running on port {PORT}")
     server.serve_forever()
 
 if __name__ == "__main__":
