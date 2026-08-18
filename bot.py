@@ -28,7 +28,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
 }
 
-# --- Persistent Database Setup ---
+# --- Database Setup ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -61,8 +61,8 @@ def mark_as_posted(deal_id):
     finally:
         conn.close()
 
-# --- 100% Working Referral & Commission Link Generator ---
-def make_affiliate_link(url):
+# --- Clean Affiliate Link Formatter ---
+def format_affiliate_url(url):
     if not url:
         return f"https://www.amazon.in?tag={AMAZON_TAG}&ascsubtag={EARNKARO_ID}"
     
@@ -82,80 +82,90 @@ def make_affiliate_link(url):
     
     return f"{clean_url}{sep}tag={AMAZON_TAG}&ref={EARNKARO_ID}"
 
-# --- Real-Time Live Loot Deals Scraper (DesiDime + FreeStuff) ---
-def fetch_realtime_deals():
+# --- Real-Time Scraper Engine ---
+def fetch_live_marketplace_deals():
     deals = []
     
-    # 1. DesiDime Live RSS Stream
+    # Primary Source: IndiaFreeStuff Live Feed
     try:
-        res = requests.get("https://www.desidime.com/feed", headers=HEADERS, timeout=8)
+        res = requests.get("https://indiafreestuff.in/feed", headers=HEADERS, timeout=10)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
-            for item in root.findall('.//item')[:10]:
+            for item in root.findall('.//item')[:12]:
                 title = item.find('title').text.strip() if item.find('title') is not None else ""
-                desc = item.find('description').text if item.find('description') is not None else ""
                 link = item.find('link').text.strip() if item.find('link') is not None else ""
-                
+                desc = item.find('description').text if item.find('description') is not None else ""
+
                 soup = BeautifulSoup(desc, "html.parser")
                 img_tag = soup.find("img")
                 img_url = img_tag.get("src") if img_tag else ""
-                
-                store_tag = soup.find("a", href=True)
-                target_url = store_tag['href'] if store_tag else link
+
+                # Extract direct merchant link if present
+                store_link = None
+                for a in soup.find_all("a", href=True):
+                    href = a['href']
+                    if any(domain in href for domain in ["amazon.in", "amzn.to", "flipkart.com", "myntra.com", "ajio.com", "meesho.com"]):
+                        store_link = href
+                        break
+
+                target_url = store_link if store_link else link
 
                 if title and target_url:
                     deals.append({
-                        "id": f"dd_{hash(title)}",
+                        "id": f"deal_{hash(title)}",
                         "title": title,
                         "url": target_url,
                         "photo": img_url
                     })
     except Exception as e:
-        print(f"DesiDime feed warning: {e}")
+        print(f"IFS feed error: {e}")
 
-    # 2. IndiaFreeStuff Real-Time Stream (Secondary Stream)
-    if len(deals) < 4:
-        try:
-            res2 = requests.get("https://indiafreestuff.in/feed", headers=HEADERS, timeout=8)
-            if res2.status_code == 200:
-                root2 = ET.fromstring(res2.content)
-                for item in root2.findall('.//item')[:6]:
-                    title = item.find('title').text.strip() if item.find('title') is not None else ""
-                    desc = item.find('description').text if item.find('description') is not None else ""
-                    link = item.find('link').text.strip() if item.find('link') is not None else ""
+    # Secondary Source: DesiDime Live Feed
+    try:
+        res2 = requests.get("https://www.desidime.com/feed", headers=HEADERS, timeout=10)
+        if res2.status_code == 200:
+            root2 = ET.fromstring(res2.content)
+            for item in root2.findall('.//item')[:10]:
+                title = item.find('title').text.strip() if item.find('title') is not None else ""
+                desc = item.find('description').text if item.find('description') is not None else ""
+                link = item.find('link').text.strip() if item.find('link') is not None else ""
 
-                    soup2 = BeautifulSoup(desc, "html.parser")
-                    img_tag2 = soup2.find("img")
-                    img_url2 = img_tag2.get("src") if img_tag2 else ""
+                soup2 = BeautifulSoup(desc, "html.parser")
+                img_tag2 = soup2.find("img")
+                img_url2 = img_tag2.get("src") if img_tag2 else ""
 
+                store_tag = soup2.find("a", href=True)
+                target_url2 = store_tag['href'] if store_tag else link
+
+                if title and target_url2:
                     deals.append({
-                        "id": f"ifs_{hash(title)}",
+                        "id": f"dd_{hash(title)}",
                         "title": title,
-                        "url": link,
+                        "url": target_url2,
                         "photo": img_url2
                     })
-        except Exception as e:
-            print(f"IFS feed warning: {e}")
+    except Exception as e:
+        print(f"DesiDime feed error: {e}")
 
     return deals
 
-# --- Direct Telegram Broadcaster (Conflict-Free) ---
+# --- Direct Telegram Broadcaster ---
 def send_telegram_deal(deal):
     clean_title = re.sub(r'[*_`\[\]]', '', deal['title'])
     safe_title = html.escape(clean_title)
-    aff_link = make_affiliate_link(deal["url"])
+    aff_link = format_affiliate_url(deal["url"])
 
     caption = (
-        f"🔥 <b>SUPER PRICE DROP / LOOT OFFER</b> 🔥\n\n"
+        f"🔥 <b>LIVE PRICE DROP / LOOT DEAL</b> 🔥\n\n"
         f"📦 <b>{safe_title}</b>\n\n"
-        f"⚡ <i>Limited Stock! Jaldi Grab Karein!</i>"
+        f"⚡ <i>Limited Period Offer! Jaldi Grab Karein!</i>"
     )
 
     reply_markup = {
         "inline_keyboard": [[{"text": "🛒 Buy Now / Loot Deal", "url": aff_link}]]
     }
 
-    # Attempt 1: Direct Photo Stream with Image Bytes
+    # Direct photo upload
     if deal.get("photo") and deal["photo"].startswith("http"):
         try:
             img_res = requests.get(deal["photo"], headers=HEADERS, timeout=8)
@@ -171,9 +181,9 @@ def send_telegram_deal(deal):
                 if resp.status_code == 200:
                     return True
         except Exception as e:
-            print(f"Photo upload fallback: {e}")
+            print(f"Image upload fallback: {e}")
 
-    # Attempt 2: Text Message Fallback if image fails
+    # Fallback to text message if image load fails
     try:
         payload = {
             "chat_id": CHANNEL_ID,
@@ -187,29 +197,26 @@ def send_telegram_deal(deal):
         print(f"Message post error: {e}")
         return False
 
-# --- 24/7 Automated Posting Loop ---
+# --- 24/7 Background Loop ---
 def continuous_deals_poster():
     while True:
         try:
-            deals = fetch_realtime_deals()
-            posted_any = False
-
+            deals = fetch_live_deals := fetch_live_marketplace_deals()
             for deal in deals:
                 if not is_already_posted(deal["id"]):
                     success = send_telegram_deal(deal)
                     if success:
                         mark_as_posted(deal["id"])
-                        print(f"Posted Real-Time Deal: {deal['title']}")
-                        posted_any = True
+                        print(f"Live deal posted: {deal['title']}")
                         time.sleep(3)
                         break
         except Exception as e:
-            print(f"Scraper loop warning: {e}")
+            print(f"Loop error: {e}")
 
-        # Har 5 minute mein nayi live deals check karega
+        # Check for new live deals every 5 minutes
         time.sleep(300)
 
-# --- Keep-Alive Health Server for UptimeRobot ---
+# --- Keep-Alive Health Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
