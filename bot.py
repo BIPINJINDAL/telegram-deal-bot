@@ -1,14 +1,12 @@
 import os
 import io
+import time
 import html
-import asyncio
 import sqlite3
 import threading
 import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- Configuration ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -28,7 +26,7 @@ HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
 }
 
-# --- Database ---
+# --- Persistent Database Setup ---
 def init_db():
     conn = sqlite3.connect("deals.db")
     c = conn.cursor()
@@ -68,7 +66,7 @@ def clear_db():
     conn.commit()
     conn.close()
 
-# --- Multi-Store Clean Tracking URL Generator ---
+# --- Affiliate URL Generator ---
 def build_clean_affiliate_link(platform, base_url):
     clean_url = base_url.split("?")[0].strip()
     if platform == "Amazon":
@@ -83,7 +81,7 @@ def build_clean_affiliate_link(platform, base_url):
         return f"{clean_url}?ref_id={EARNKARO_ID}"
     return f"{clean_url}?tag={AMAZON_TAG}"
 
-# --- Verified All-Platform Real Deals Catalog ---
+# --- All Platforms Verified Active Inventory ---
 ALL_PLATFORMS_DEALS = [
     {
         "id": "amz_boat_141",
@@ -175,120 +173,103 @@ ALL_PLATFORMS_DEALS = [
     }
 ]
 
-# --- Direct Safe Image Streamer ---
-def get_image_file(url):
+# --- Direct Telegram HTTP Poster (100% Conflict Free) ---
+def send_deal_direct(deal):
+    deal_url = build_clean_affiliate_link(deal["platform"], deal["url"])
+    safe_badge = html.escape(deal['badge'])
+    safe_title = html.escape(deal['title'])
+    price_text = html.escape(deal['price'])
+    mrp_text = html.escape(deal['mrp'])
+    discount_text = html.escape(deal['discount'])
+
+    caption = (
+        f"🔥 <b>{safe_badge} ({discount_text})</b> 🔥\n\n"
+        f"📦 <b>{safe_title}</b>\n\n"
+        f"🔻 MRP: <s>{mrp_text}</s>\n"
+        f"💥 <b>Offer Price: {price_text}</b>\n\n"
+        f"⚡ <i>Limited Period Loot Deal! Jaldi Grab Karein!</i>"
+    )
+    
+    reply_markup = {
+        "inline_keyboard": [[{"text": f"🛒 Buy on {deal['platform']} / Grab Deal", "url": deal_url}]]
+    }
+
     try:
-        res = requests.get(url, headers=HEADERS, timeout=8)
+        res = requests.get(deal["image_url"], headers=HEADERS, timeout=8)
         if res.status_code == 200 and len(res.content) > 1000:
-            bio = io.BytesIO(res.content)
-            bio.name = "product.jpg"
-            return bio
+            files = {"photo": ("product.jpg", io.BytesIO(res.content), "image/jpeg")}
+            data = {
+                "chat_id": CHANNEL_ID,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "reply_markup": requests.utils.json.dumps(reply_markup)
+            }
+            resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data, files=files, timeout=12)
+            return resp.status_code == 200
     except Exception as e:
-        print(f"Image fetch error: {e}")
-    return None
+        print(f"Direct photo post error: {e}")
 
-# --- Channel Broadcaster ---
-async def post_deals_to_channel(bot, force=False, chat_to_notify=None):
-    shuffled_deals = ALL_PLATFORMS_DEALS.copy()
-    random.shuffle(shuffled_deals)
-    posted_count = 0
-    err_message = None
+    # Fallback to sendMessage if photo upload times out
+    try:
+        payload = {
+            "chat_id": CHANNEL_ID,
+            "text": caption,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup
+        }
+        resp = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload, timeout=10)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"Direct message post error: {e}")
+        return False
 
-    for deal in shuffled_deals:
-        if not force and is_already_posted(deal["id"]):
-            continue
-
-        deal_url = build_clean_affiliate_link(deal["platform"], deal["url"])
-        safe_badge = html.escape(deal['badge'])
-        safe_title = html.escape(deal['title'])
-        price_text = html.escape(deal['price'])
-        mrp_text = html.escape(deal['mrp'])
-        discount_text = html.escape(deal['discount'])
-
-        caption = (
-            f"🔥 <b>{safe_badge} ({discount_text})</b> 🔥\n\n"
-            f"📦 <b>{safe_title}</b>\n\n"
-            f"🔻 MRP: <s>{mrp_text}</s>\n"
-            f"💥 <b>Offer Price: {price_text}</b>\n\n"
-            f"⚡ <i>Limited Period Loot Deal! Jaldi order karein!</i>"
-        )
-        btn = InlineKeyboardMarkup([[InlineKeyboardButton(f"🛒 Buy on {deal['platform']} (Deal Link)", url=deal_url)]])
-
-        img_file = get_image_file(deal["image_url"])
-
+# --- 24/7 Automated Posting Loop ---
+def continuous_deals_poster():
+    while True:
         try:
-            if img_file:
-                await bot.send_photo(
-                    chat_id=CHANNEL_ID,
-                    photo=img_file,
-                    caption=caption,
-                    reply_markup=btn,
-                    parse_mode="HTML"
-                )
-                mark_as_posted(deal["id"])
-                posted_count += 1
-                await asyncio.sleep(2)
-            else:
-                print(f"Skipping post {deal['id']} because image failed.")
+            pool = ALL_PLATFORMS_DEALS.copy()
+            random.shuffle(pool)
+            
+            # Agar sabhi deals post ho chuki hain, toh cache auto-clear karke fresh loop chalu karein
+            all_posted = all(is_already_posted(d["id"]) for d in pool)
+            if all_posted:
+                print("All catalog deals posted. Rotating cycle...")
+                clear_db()
 
-            if force and posted_count >= 2:
-                break
+            for deal in pool:
+                if not is_already_posted(deal["id"]):
+                    success = send_deal_direct(deal)
+                    if success:
+                        mark_as_posted(deal["id"])
+                        print(f"Successfully posted on channel: {deal['title']}")
+                        time.sleep(3)
+                        break
         except Exception as e:
-            err_message = str(e)
-            print(f"Telegram Post Error: {e}")
-            break
+            print(f"Background engine error: {e}")
+        
+        # Har 5 minute (300 seconds) mein 1 fresh deal auto-post karega
+        time.sleep(300)
 
-    if chat_to_notify:
-        if err_message:
-            await bot.send_message(chat_id=chat_to_notify, text=f"❌ Error: <code>{html.escape(err_message)}</code>", parse_mode="HTML")
-        elif posted_count > 0:
-            await bot.send_message(chat_id=chat_to_notify, text=f"✅ {posted_count} Multi-Platform Deals (with Images & User ID 5545743) post ho chuki hain!")
-        else:
-            await bot.send_message(chat_id=chat_to_notify, text="ℹ️ Saari deals already posted hain. Nayi deal aate hi auto post hogi.")
-
-async def auto_job(context: ContextTypes.DEFAULT_TYPE):
-    await post_deals_to_channel(context.bot, force=False)
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 <b>All-Platform Deals Bot Live!</b>\n\n• <code>/postnow</code> - Instant multi-store deals post karein\n• <code>/reset</code> - Reset database", parse_mode="HTML")
-
-async def postnow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Multi-Platform deals fetch karke channel par post ki ja rahi hain...")
-    await post_deals_to_channel(context.bot, force=True, chat_to_notify=update.effective_chat.id)
-
-async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    clear_db()
-    await update.message.reply_text("🧹 Reset complete! Ab `/postnow` karein.")
-
-# --- Keep-Alive Health Server ---
+# --- Keep-Alive Health Server for UptimeRobot ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Live 24/7!")
+        self.wfile.write(b"Bot Engine Live 24/7 (Conflict-Free)")
     def log_message(self, format, *args):
         return
-
-def run_health_server():
-    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
-    server.serve_forever()
 
 def main():
     init_db()
     
-    web_thread = threading.Thread(target=run_health_server, daemon=True)
-    web_thread.start()
+    # 1. Start posting loop in background thread
+    poster_thread = threading.Thread(target=continuous_deals_poster, daemon=True)
+    poster_thread.start()
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("postnow", postnow_cmd))
-    app.add_handler(CommandHandler("reset", reset_cmd))
-
-    # Auto job har 5 minute mein chalega
-    app.job_queue.run_repeating(auto_job, interval=300, first=5)
-
-    print("Bot is polling...")
-    app.run_polling(drop_pending_updates=True)
+    # 2. Start HTTP Health Server for 24/7 Uptime
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    print(f"Health Server running on port {PORT}...")
+    server.serve_forever()
 
 if __name__ == "__main__":
     main()
