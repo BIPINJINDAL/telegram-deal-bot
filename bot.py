@@ -1,6 +1,8 @@
 import os
+import io
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -14,7 +16,11 @@ except ValueError:
 
 PORT = int(os.getenv("PORT", 8080))
 
-# Simple Flipkart Deals Pool
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+}
+
+# Working Flipkart Deals
 DEALS = [
     {
         "title": "boAt Airdopes 131 PRO True Wireless Earbuds (45H Playtime)",
@@ -44,6 +50,17 @@ DEALS = [
 
 deal_index = 0
 
+def download_image(url):
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        if res.status_code == 200 and len(res.content) > 1000:
+            bio = io.BytesIO(res.content)
+            bio.name = "product.jpg"
+            return bio
+    except Exception as e:
+        print(f"Image load error: {e}")
+    return None
+
 async def post_next_deal(bot, chat_to_notify=None):
     global deal_index
     deal = DEALS[deal_index % len(DEALS)]
@@ -60,13 +77,23 @@ async def post_next_deal(bot, chat_to_notify=None):
     btn = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Buy on Flipkart", url=deal["url"])]])
 
     try:
-        await bot.send_photo(
-            chat_id=CHANNEL_ID,
-            photo=deal["photo"],
-            caption=caption,
-            reply_markup=btn,
-            parse_mode="HTML"
-        )
+        img_buffer = download_image(deal["photo"])
+        if img_buffer:
+            await bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=img_buffer,
+                caption=caption,
+                reply_markup=btn,
+                parse_mode="HTML"
+            )
+        else:
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=caption,
+                reply_markup=btn,
+                parse_mode="HTML"
+            )
+        
         if chat_to_notify:
             await bot.send_message(chat_id=chat_to_notify, text="✅ Deal channel par post ho gayi!")
     except Exception as e:
@@ -98,7 +125,7 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("postnow", postnow_cmd))
 
-    # Har 5 minute mein 1 post
+    # Har 5 minute mein auto post
     app.job_queue.run_repeating(auto_post, interval=300, first=10)
 
     print("Bot is running...")
